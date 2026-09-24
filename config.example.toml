@@ -1,0 +1,29 @@
+# ircgo example configuration.
+# Copy to ~/.config/ircclient/config.toml and edit.
+
+[ui]
+timestamp_format = "15:04"
+sidebar_width = 26
+
+# Direct TLS connection to Libera Chat.
+[[server]]
+name = "libera"
+host = "irc.libera.chat"
+port = 6697
+tls = true
+nick = "matt"
+channels = ["#linux", "#golang"]
+
+# ZNC bouncer. The PASS payload is assembled as "user/network:password".
+[[server]]
+name = "znc"
+host = "bouncer.example.com"
+port = 6697
+tls = true
+#insecure_skip_verify = true  # only for self-signed bouncer certs
+nick = "matt"
+username = "matt"
+network = "libera"
+password = "hunter2"
+sasl = false
+channels = ["#homelab"]

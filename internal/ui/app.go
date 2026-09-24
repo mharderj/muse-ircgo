@@ -1,0 +1,385 @@
+// Package ui is the Bubble Tea interface: a sidebar of buffers, a chat
+// viewport, an input line, and a status bar.
+package ui
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
+	"ircgo/internal/config"
+	"ircgo/internal/irc"
+	"ircgo/internal/store"
+)
+
+// ircEventMsg carries a protocol event into the Update loop.
+type ircEventMsg struct{ ev irc.Event }
+
+// eventsClosedMsg fires when the event channel is closed.
+type eventsClosedMsg struct{}
+
+// waitForEvents returns a Cmd that yields the next IRC event.
+func waitForEvents(ch <-chan irc.Event) tea.Cmd {
+	return func() tea.Msg {
+		ev, ok := <-ch
+		if !ok {
+			return eventsClosedMsg{}
+		}
+		return ircEventMsg{ev: ev}
+	}
+}
+
+var (
+	tsStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	nickStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true)
+	sysStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true)
+	sidebarStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder(), false, true, false, false).
+			BorderForeground(lipgloss.Color("8"))
+	statusStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("7")).
+			Background(lipgloss.Color("4"))
+)
+
+// App is the root Bubble Tea model.
+type App struct {
+	cfg     *config.Config
+	st      *store.Store
+	events  <-chan irc.Event
+	clients map[string]*irc.Client
+
+	bufs  []*store.Buffer
+	focus int
+
+	sidebar viewport.Model
+	chat    viewport.Model
+	input   textinput.Model
+
+	width  int
+	height int
+	ready  bool
+}
+
+// New builds the root model. Event flow: the IRC clients publish to events,
+// Init arms waitForEvents, and each received event re-arms it.
+func New(cfg *config.Config, st *store.Store, events <-chan irc.Event, clients map[string]*irc.Client) *App {
+	ti := textinput.New()
+	ti.Prompt = "> "
+	ti.CharLimit = 440
+	ti.Focus()
+	return &App{
+		cfg: cfg, st: st, events: events, clients: clients,
+		input: ti,
+	}
+}
+
+func (a *App) Init() tea.Cmd {
+	return tea.Batch(waitForEvents(a.events), textinput.Blink)
+}
+
+func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		a.width, a.height = msg.Width, msg.Height
+		a.ready = true
+		a.resize()
+		return a, nil
+	case eventsClosedMsg:
+		return a, tea.Quit
+	case ircEventMsg:
+		a.handleEvent(msg.ev)
+		return a, waitForEvents(a.events)
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c":
+			return a, tea.Quit
+		case "tab":
+			if len(a.bufs) > 0 {
+				a.focus = (a.focus + 1) % len(a.bufs)
+				a.renderSidebar()
+				a.renderChat()
+			}
+			return a, nil
+		case "enter":
+			v := strings.TrimSpace(a.input.Value())
+			a.input.SetValue("")
+			if v != "" {
+				return a, a.sendInput(v)
+			}
+			return a, nil
+		}
+	}
+	var cmd tea.Cmd
+	a.input, cmd = a.input.Update(msg)
+	return a, cmd
+}
+
+// handleEvent files a protocol event into scrollback and re-renders.
+func (a *App) handleEvent(ev irc.Event) {
+	switch ev.Kind {
+	case irc.KindConnected:
+		a.addLine(ev.Server, ev.Server, store.Line{At: time.Now(), Text: "connected", Kind: store.KindSystem})
+	case irc.KindDisconnected:
+		a.addLine(ev.Server, ev.Server, store.Line{At: time.Now(), Text: "disconnected", Kind: store.KindSystem})
+	case irc.KindError:
+		a.addLine(ev.Server, ev.Server, store.Line{At: time.Now(), Text: "error: " + ev.Text, Kind: store.KindSystem})
+	case irc.KindMessage:
+		a.handleMessage(ev.Server, ev.Msg)
+	}
+	a.bufs = a.st.Buffers()
+	a.renderSidebar()
+	if a.ready {
+		a.renderChat()
+	}
+}
+
+func (a *App) addLine(server, target string, l store.Line) {
+	a.st.Get(server, target).Append(l)
+}
+
+func (a *App) handleMessage(server string, m *irc.Message) {
+	// Prefer the server-time tag (bouncer backlog) over wall-clock time.
+	at := m.Time()
+	if at.IsZero() {
+		at = time.Now()
+	}
+	nick := m.Nick()
+
+	switch m.Command {
+	case "PRIVMSG":
+		if len(m.Params) < 2 {
+			return
+		}
+		target, text := m.Params[0], m.Params[1]
+		buf := target
+		if !isChannel(target) {
+			// Direct message: file under the other party's nick.
+			buf = nick
+			if buf == "" {
+				buf = server
+			}
+		}
+		kind := store.KindChat
+		if strings.HasPrefix(text, "\x01ACTION ") && strings.HasSuffix(text, "\x01") {
+			kind = store.KindAction
+			text = strings.TrimSuffix(strings.TrimPrefix(text, "\x01ACTION "), "\x01")
+		}
+		a.addLine(server, buf, store.Line{At: at, Nick: nick, Text: text, Kind: kind})
+	case "NOTICE":
+		target := server
+		if len(m.Params) > 0 && isChannel(m.Params[0]) {
+			target = m.Params[0]
+		}
+		// ZNC talks through *status; keep it in the server window.
+		if nick == "*status" {
+			target = server
+		}
+		a.addLine(server, target, store.Line{At: at, Nick: nick, Text: m.Trailing(), Kind: store.KindNotice})
+	case "JOIN":
+		if len(m.Params) < 1 {
+			return
+		}
+		ch := m.Params[0]
+		a.addLine(server, ch, store.Line{At: at, Nick: nick, Text: "joined " + ch, Kind: store.KindJoin})
+	case "PART":
+		ch := ""
+		if len(m.Params) > 0 {
+			ch = m.Params[0]
+		}
+		a.addLine(server, ch, store.Line{At: at, Nick: nick, Text: "left " + ch, Kind: store.KindPart})
+	case "QUIT":
+		// No membership tracking yet; log to the server window.
+		a.addLine(server, server, store.Line{At: at, Nick: nick, Text: "quit: " + m.Trailing(), Kind: store.KindQuit})
+	case "NICK":
+		a.addLine(server, server, store.Line{At: at, Nick: nick, Text: "is now known as " + m.Trailing(), Kind: store.KindSystem})
+	default:
+		if isNumeric(m.Command) {
+			// Keep the welcome/MOTD numerics, skip the noise.
+			switch m.Command {
+			case "001", "002", "003", "004", "005", "372", "375", "376":
+				text := m.Trailing()
+				if text == "" && len(m.Params) > 1 {
+					text = strings.Join(m.Params[1:], " ")
+				}
+				a.addLine(server, server, store.Line{At: at, Text: text, Kind: store.KindSystem})
+			}
+		}
+	}
+}
+
+func isChannel(s string) bool {
+	return strings.HasPrefix(s, "#") || strings.HasPrefix(s, "&")
+}
+
+func isNumeric(s string) bool {
+	if len(s) != 3 {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *App) renderSidebar() {
+	var b strings.Builder
+	lastServer := ""
+	for i, buf := range a.bufs {
+		if buf.Server != lastServer {
+			if lastServer != "" {
+				b.WriteString("\n")
+			}
+			fmt.Fprintf(&b, "%s\n", lipgloss.NewStyle().Bold(true).Render(buf.Server))
+			lastServer = buf.Server
+		}
+		line := "  " + buf.Name
+		if i == a.focus {
+			line = lipgloss.NewStyle().Reverse(true).Render("> " + buf.Name)
+		}
+		b.WriteString(line + "\n")
+	}
+	a.sidebar.SetContent(b.String())
+}
+
+func (a *App) renderChat() {
+	if len(a.bufs) == 0 {
+		a.chat.SetContent("connecting…")
+		return
+	}
+	if a.focus >= len(a.bufs) {
+		a.focus = 0
+	}
+	buf := a.bufs[a.focus]
+	var b strings.Builder
+	for _, l := range buf.Lines() {
+		ts := l.At.Format(a.cfg.UI.TimestampFormat)
+		switch l.Kind {
+		case store.KindChat:
+			fmt.Fprintf(&b, "%s %s %s\n",
+				tsStyle.Render(ts),
+				nickStyle.Render(fmt.Sprintf("%-14s", l.Nick)),
+				l.Text)
+		case store.KindAction:
+			fmt.Fprintf(&b, "%s %s\n", tsStyle.Render(ts),
+				sysStyle.Render("* "+l.Nick+" "+l.Text))
+		default:
+			fmt.Fprintf(&b, "%s %s\n", tsStyle.Render(ts), sysStyle.Render(l.Text))
+		}
+	}
+	a.chat.SetContent(b.String())
+	a.chat.GotoBottom()
+}
+
+func (a *App) resize() {
+	sw := a.cfg.UI.SidebarWidth
+	if sw < 16 {
+		sw = 16
+	}
+	chatW := a.width - sw - 1 // 1 for the sidebar border
+	if chatW < 20 {
+		chatW = 20
+	}
+	chatH := a.height - 2 // input line + status line
+	if chatH < 5 {
+		chatH = 5
+	}
+	a.sidebar = viewport.New(sw, chatH)
+	a.chat = viewport.New(chatW, chatH)
+	a.input.Width = chatW - 2
+	a.renderSidebar()
+	a.renderChat()
+}
+
+func (a *App) View() string {
+	if !a.ready {
+		return "connecting…"
+	}
+	main := lipgloss.JoinHorizontal(lipgloss.Top,
+		sidebarStyle.Render(a.sidebar.View()),
+		a.chat.View(),
+	)
+	body := lipgloss.JoinVertical(lipgloss.Left, main, a.input.View())
+	return lipgloss.JoinVertical(lipgloss.Left, body, a.statusLine())
+}
+
+func (a *App) statusLine() string {
+	focused := ""
+	if len(a.bufs) > 0 && a.focus < len(a.bufs) {
+		b := a.bufs[a.focus]
+		focused = b.Server + "/" + b.Name
+	}
+	return statusStyle.Width(a.width).
+		Render(fmt.Sprintf(" %s  •  tab: switch buffer  •  ctrl+c: quit ", focused))
+}
+
+// sendInput routes the input line: slash commands or a PRIVMSG to the
+// focused buffer.
+func (a *App) sendInput(v string) tea.Cmd {
+	if len(a.bufs) == 0 {
+		return nil
+	}
+	buf := a.bufs[a.focus]
+	cl, ok := a.clients[buf.Server]
+	if !ok {
+		return nil
+	}
+	if strings.HasPrefix(v, "/") {
+		return a.sendCommand(cl, buf, v)
+	}
+	target := buf.Name
+	if target == buf.Server {
+		return nil // nowhere to send from the server window
+	}
+	_ = cl.Send("PRIVMSG " + target + " :" + v)
+	a.addLine(buf.Server, target, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: v, Kind: store.KindChat})
+	a.renderChat()
+	return nil
+}
+
+func (a *App) ownNick(server string) string {
+	for _, s := range a.cfg.Servers {
+		if s.Name == server {
+			return s.Nick
+		}
+	}
+	return "me"
+}
+
+func (a *App) sendCommand(cl *irc.Client, buf *store.Buffer, v string) tea.Cmd {
+	parts := strings.Fields(v)
+	if len(parts) == 0 {
+		return nil
+	}
+	switch strings.ToLower(parts[0]) {
+	case "/join":
+		if len(parts) > 1 {
+			_ = cl.Send("JOIN " + parts[1])
+		}
+	case "/part":
+		target := buf.Name
+		if len(parts) > 1 {
+			target = parts[1]
+		}
+		_ = cl.Send("PART " + target)
+	case "/msg":
+		if len(parts) > 2 {
+			to := parts[1]
+			text := strings.Join(parts[2:], " ")
+			_ = cl.Send("PRIVMSG " + to + " :" + text)
+			a.addLine(buf.Server, to, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: text, Kind: store.KindChat})
+			a.bufs = a.st.Buffers()
+			a.renderSidebar()
+			a.renderChat()
+		}
+	case "/quit":
+		return tea.Quit
+	}
+	return nil
+}
