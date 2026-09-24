@@ -20,6 +20,15 @@ cp config.example.toml ~/.config/ircclient/config.toml
 # or: ./ircgo -config /path/to/config.toml
 ```
 
+Stuck at "connecting…"? Run with `-debug` and check the log — it records
+each connection step (dial, TLS handshake, registration) with passwords
+redacted:
+
+```sh
+./ircgo -debug
+tail -f ~/.config/ircclient/debug.log
+```
+
 ## Layout
 
 ```

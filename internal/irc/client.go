@@ -80,11 +80,12 @@ func (c *Client) Send(line string) error {
 // Run connects, registers, and pumps messages until ctx is cancelled or the
 // connection drops.
 func (c *Client) Run(ctx context.Context) {
-	conn, err := Dial(c.cfg.Host, c.port(), c.cfg.TLS, c.cfg.InsecureSkipVerify)
+	conn, err := Dial(c.cfg.Name, c.cfg.Host, c.port(), c.cfg.TLS, c.cfg.InsecureSkipVerify)
 	if err != nil {
 		c.emit(Event{Kind: KindError, Text: fmt.Sprintf("dial %s: %v", c.cfg.Addr(), err)})
 		return
 	}
+	debugf(c.cfg.Name, "registering as %s", c.cfg.Nick)
 	c.mu.Lock()
 	c.conn = conn
 	c.mu.Unlock()
@@ -114,6 +115,7 @@ func (c *Client) Run(ctx context.Context) {
 			c.emit(Event{Kind: KindError, Text: fmt.Sprintf("read: %v", err)})
 			return
 		}
+		debugf(c.cfg.Name, "<- %s", line)
 		msg, err := Parse(line)
 		if err != nil {
 			continue
@@ -135,6 +137,7 @@ func (c *Client) port() int {
 // register performs the PASS/CAP/NICK/USER handshake.
 func (c *Client) register() error {
 	if c.cfg.HasPass() {
+		debugf(c.cfg.Name, "-> PASS (redacted)")
 		if err := c.Send("PASS " + c.cfg.Pass()); err != nil {
 			return err
 		}
@@ -144,6 +147,7 @@ func (c *Client) register() error {
 		"NICK " + c.cfg.Nick,
 		fmt.Sprintf("USER %s 0 * :ircgo", c.cfg.Nick),
 	} {
+		debugf(c.cfg.Name, "-> %s", line)
 		if err := c.Send(line); err != nil {
 			return err
 		}
@@ -165,6 +169,7 @@ func (c *Client) handle(m *Message) {
 		c.handleAuthenticate(m)
 		return
 	case "001": // welcome: registration complete
+		debugf(c.cfg.Name, "registered, joining %d channel(s)", len(c.cfg.Channels))
 		for _, ch := range c.cfg.Channels {
 			_ = c.Send("JOIN " + ch)
 		}

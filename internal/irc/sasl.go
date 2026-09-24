@@ -22,6 +22,7 @@ func (c *Client) handleAuthenticate(m *Message) {
 	for _, chunk := range saslChunks(b64) {
 		_ = c.Send("AUTHENTICATE " + chunk)
 	}
+	debugf(c.cfg.Name, "-> AUTHENTICATE (redacted blob)")
 }
 
 // saslChunks splits a base64 blob into 400-byte AUTHENTICATE lines,
