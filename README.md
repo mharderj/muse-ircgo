@@ -52,6 +52,11 @@ internal/ui          Bubble Tea models: sidebar, chat viewport, input, status ba
 
 Slash commands: `/join #chan`, `/part [#chan]`, `/msg nick text`, `/quit`.
 
+CTCP is supported: `/me`-style actions render inline, incoming queries
+(`VERSION`, `PING`, `TIME`, `FINGER`, `USERINFO`, `CLIENTINFO`) are answered
+automatically via NOTICE, and CTCP replies land in the sender's buffer.
+`./ircgo -version` prints the release (currently v0.1).
+
 ## ZNC notes
 
 - Auth uses `PASS user/network:password`, assembled from the `username`,

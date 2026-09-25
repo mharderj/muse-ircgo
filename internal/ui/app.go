@@ -15,6 +15,7 @@ import (
 	"ircgo/internal/config"
 	"ircgo/internal/irc"
 	"ircgo/internal/store"
+	"ircgo/internal/version"
 )
 
 // ircEventMsg carries a protocol event into the Update loop.
@@ -172,12 +173,33 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 			}
 		}
 		kind := store.KindChat
-		if strings.HasPrefix(text, "\x01ACTION ") && strings.HasSuffix(text, "\x01") {
-			kind = store.KindAction
-			text = strings.TrimSuffix(strings.TrimPrefix(text, "\x01ACTION "), "\x01")
+		if cmd, args, ok := irc.ParseCTCP(text); ok {
+			switch cmd {
+			case "ACTION":
+				kind = store.KindAction
+				text = args
+			default:
+				// CTCP query: show it, and answer direct (never
+				// channel) queries with a NOTICE, per the CTCP spec.
+				// Unknown commands get no reply.
+				text = "CTCP " + cmd
+				if args != "" {
+					text += " " + args
+				}
+				kind = store.KindNotice
+				if !isChannel(target) && nick != "" && nick != a.ownNick(server) {
+					if reply := ctcpReply(cmd, args); reply != "" {
+						if cl, ok := a.clients[server]; ok {
+							_ = cl.Send("NOTICE " + nick + " :\x01" + reply + "\x01")
+						}
+					}
+				}
+			}
 		}
 		a.addLine(server, buf, store.Line{At: at, Nick: nick, Text: text, Kind: kind})
 	case "NOTICE":
+		text := m.Trailing()
+		kind := store.KindNotice
 		target := server
 		if len(m.Params) > 0 && isChannel(m.Params[0]) {
 			target = m.Params[0]
@@ -185,8 +207,18 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 		// ZNC talks through *status; keep it in the server window.
 		if nick == "*status" {
 			target = server
+		} else if cmd, args, ok := irc.ParseCTCP(text); ok {
+			// CTCP replies read better in the sender's buffer than
+			// buried in the server window.
+			text = "CTCP " + cmd
+			if args != "" {
+				text += ": " + args
+			}
+			if target == server && nick != "" {
+				target = nick
+			}
 		}
-		a.addLine(server, target, store.Line{At: at, Nick: nick, Text: m.Trailing(), Kind: store.KindNotice})
+		a.addLine(server, target, store.Line{At: at, Nick: nick, Text: text, Kind: kind})
 	case "JOIN":
 		if len(m.Params) < 1 {
 			return
@@ -234,6 +266,27 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 
 func isChannel(s string) bool {
 	return strings.HasPrefix(s, "#") || strings.HasPrefix(s, "&")
+}
+
+// ctcpReply answers the common CTCP queries. Unknown commands return "",
+// meaning no reply: answering those is how CTCP loops start.
+func ctcpReply(cmd, args string) string {
+	switch cmd {
+	case "VERSION":
+		return "VERSION ircgo " + version.Version
+	case "PING":
+		if args == "" {
+			return ""
+		}
+		return "PING " + args
+	case "TIME":
+		return "TIME " + time.Now().Format("Mon Jan 2 15:04:05 2006")
+	case "CLIENTINFO":
+		return "CLIENTINFO VERSION PING TIME FINGER USERINFO CLIENTINFO ACTION"
+	case "FINGER", "USERINFO":
+		return cmd + " ircgo user"
+	}
+	return ""
 }
 
 func isNumeric(s string) bool {

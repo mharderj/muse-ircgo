@@ -17,12 +17,19 @@ import (
 	"ircgo/internal/irc"
 	"ircgo/internal/store"
 	"ircgo/internal/ui"
+	"ircgo/internal/version"
 )
 
 func main() {
 	cfgPath := flag.String("config", config.DefaultPath(), "path to config.toml")
 	debug := flag.Bool("debug", false, "write connection diagnostics to debug.log (passwords redacted)")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("ircgo v%s\n", version.Version)
+		return
+	}
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
