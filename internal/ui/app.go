@@ -139,15 +139,22 @@ func (a *App) handleEvent(ev irc.Event) {
 }
 
 func (a *App) addLine(server, target string, l store.Line) {
+	if target == "" {
+		// Never create a nameless buffer (e.g. a PART with no channel
+		// param); file it in the server window instead.
+		target = server
+	}
 	a.st.Get(server, target).Append(l)
 }
 
 func (a *App) handleMessage(server string, m *irc.Message) {
-	// Prefer the server-time tag (bouncer backlog) over wall-clock time.
+	// Prefer the server-time tag (bouncer backlog) over wall-clock time,
+	// then display in local time: server-time arrives as UTC.
 	at := m.Time()
 	if at.IsZero() {
 		at = time.Now()
 	}
+	at = at.Local()
 	nick := m.Nick()
 
 	switch m.Command {
