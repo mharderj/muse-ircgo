@@ -207,6 +207,19 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 					text = strings.Join(m.Params[1:], " ")
 				}
 				a.addLine(server, server, store.Line{At: at, Text: text, Kind: store.KindSystem})
+			case "403", "442", "471", "473", "474", "475", "476":
+				// Join failures used to vanish silently: the server
+				// never echoes our JOIN, so no channel buffer appears
+				// and the user is left guessing. Surface them in the
+				// server window with the channel name attached.
+				text := strings.Join(m.Params[1:], " ")
+				if t := m.Trailing(); t != "" {
+					if text != "" {
+						text += " "
+					}
+					text += ": " + t
+				}
+				a.addLine(server, server, store.Line{At: at, Text: text, Kind: store.KindSystem})
 			}
 		}
 	}
