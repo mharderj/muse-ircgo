@@ -5,6 +5,8 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"ircgo/internal/config"
 	"ircgo/internal/img"
 	"ircgo/internal/irc"
+	"ircgo/internal/link"
 	"ircgo/internal/store"
 	"ircgo/internal/version"
 )
@@ -60,6 +63,9 @@ var (
 	chatBottomStyle = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder(), false, false, true, false).
 			BorderForeground(lipgloss.Color("8"))
+	linkStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("12")).
+			Underline(true)
 	topicStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8")).
 			Border(lipgloss.NormalBorder(), false, false, true, false).
@@ -89,6 +95,10 @@ type App struct {
 	chat    viewport.Model
 	nicks   viewport.Model
 	input   textinput.Model
+
+	// chatContentRows mirrors the chat viewport's content lines with ANSI
+	// stripped, index-aligned with them, so clicks can be mapped to URLs.
+	chatContentRows []string
 
 	width  int
 	height int
@@ -130,14 +140,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.handleImageFetched(msg)
 		return a, nil
 	case tea.MouseMsg:
-		// Left-click a sidebar buffer to switch to it. All other mouse
-		// input is swallowed so clicks don't land in the input line.
+		// Left-click a sidebar buffer to switch to it, or a chat link to
+		// open it in the browser. All other mouse input is swallowed so
+		// clicks don't land in the input line.
 		if msg.Action == tea.MouseActionRelease && msg.Button == tea.MouseButtonLeft {
 			if i, ok := a.sidebarBufferAt(msg.X, msg.Y); ok && i != a.focus {
 				a.focus = i
 				// Mirror tab: re-lay out, since the nick pane
 				// only appears for channel buffers.
 				a.resize()
+			} else if url, ok := a.linkAt(msg.X, msg.Y); ok {
+				openURL(url)
 			}
 		}
 		return a, nil
@@ -517,6 +530,148 @@ func (a *App) sidebarBufferAt(x, y int) (i int, ok bool) {
 	return 0, false
 }
 
+// sgrRe strips the SGR color/attribute sequences the renderer emits.
+var sgrRe = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+func stripANSI(s string) string { return sgrRe.ReplaceAllString(s, "") }
+
+// wrapRow word-wraps s exactly the way the chat viewport does, so click
+// coordinates can be mapped onto content lines.
+func wrapRow(s string, w int) []string {
+	if w < 1 {
+		return []string{s}
+	}
+	return strings.Split(lipgloss.NewStyle().Width(w).Render(s), "\n")
+}
+
+// drow is one visible display row of the chat viewport and the content line
+// it was wrapped from.
+type drow struct {
+	text string
+	line int
+}
+
+// urlHit is a clickable URL region on a display row, in cell coordinates.
+type urlHit struct {
+	url        string
+	start, end int
+}
+
+// visibleRows re-wraps the chat content exactly like the viewport, returning
+// the currently visible display rows.
+func (a *App) visibleRows() []drow {
+	var rows []drow
+	w := a.chat.Width
+	for i := a.chat.YOffset; i < len(a.chatContentRows) && len(rows) < a.chat.Height; i++ {
+		for _, sub := range wrapRow(a.chatContentRows[i], w) {
+			rows = append(rows, drow{text: sub, line: i})
+			if len(rows) >= a.chat.Height {
+				break
+			}
+		}
+	}
+	return rows
+}
+
+// wrappedURL reports the full content-line URL when rawFrag (a row-end URL
+// fragment) is the strict prefix of a URL on that content line: the URL was
+// broken across display rows by word wrap.
+func (a *App) wrappedURL(line int, rawFrag string) string {
+	if line < 0 || line >= len(a.chatContentRows) {
+		return ""
+	}
+	match := ""
+	for _, sp := range link.FindSpans(a.chatContentRows[line]) {
+		if strings.HasPrefix(sp.URL, rawFrag) && len(sp.URL) > len(rawFrag) {
+			if match != "" {
+				return "" // ambiguous
+			}
+			match = sp.URL
+		}
+	}
+	return match
+}
+
+// rowLinkHits returns the clickable URL regions on visible display row d.
+func (a *App) rowLinkHits(rows []drow, d int) []urlHit {
+	text := strings.TrimRight(stripANSI(rows[d].text), " ")
+	var hits []urlHit
+	spans := link.FindSpans(text)
+	for i, sp := range spans {
+		start := lipgloss.Width(text[:sp.Start])
+		url, end := sp.URL, start+lipgloss.Width(sp.URL)
+		if i == len(spans)-1 && sp.End == len(text) {
+			// A URL running to the row's end may continue on the next
+			// display row; glue it via the unwrapped content line.
+			if full := a.wrappedURL(rows[d].line, text[sp.Start:sp.End]); full != "" {
+				url, end = full, lipgloss.Width(text)
+			}
+		}
+		hits = append(hits, urlHit{url: url, start: start, end: end})
+	}
+	// A row may start with the continuation of a URL wrapped from the
+	// previous row (the fragment has no scheme, so FindSpans misses it).
+	if d > 0 && rows[d].line == rows[d-1].line {
+		prev := strings.TrimRight(stripANSI(rows[d-1].text), " ")
+		if pspans := link.FindSpans(prev); len(pspans) > 0 {
+			if p := pspans[len(pspans)-1]; p.End == len(prev) {
+				if full := a.wrappedURL(rows[d-1].line, prev[p.Start:p.End]); full != "" {
+					frag := text
+					if j := strings.IndexAny(frag, " \t"); j >= 0 {
+						frag = frag[:j]
+					}
+					if frag != "" {
+						hits = append(hits, urlHit{url: full, start: 0, end: lipgloss.Width(frag)})
+					}
+				}
+			}
+		}
+	}
+	return hits
+}
+
+// linkAt returns the URL under a chat-pane click, if any.
+func (a *App) linkAt(x, y int) (string, bool) {
+	sw := a.cfg.UI.SidebarWidth
+	if sw < 16 {
+		sw = 16
+	}
+	x0 := sw + 1 // chat pane starts after the sidebar border
+	if x < x0 || x >= x0+a.chat.Width || a.chat.Width <= 0 {
+		return "", false
+	}
+	top := 0
+	if a.topicVisible() {
+		top = topicBarHeight
+	}
+	d := y - top // display row within the viewport
+	rows := a.visibleRows()
+	if d < 0 || d >= len(rows) {
+		return "", false
+	}
+	hits := a.rowLinkHits(rows, d)
+	if len(hits) == 1 {
+		return hits[0].url, true // single link on the row: be lenient
+	}
+	cell := x - x0
+	for _, h := range hits {
+		if cell >= h.start && cell < h.end {
+			return h.url, true
+		}
+	}
+	return "", false
+}
+
+// openURL opens url in the desktop browser without blocking the UI.
+func openURL(url string) {
+	cmd := exec.Command("xdg-open", url)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
+	if err := cmd.Start(); err != nil {
+		return
+	}
+	go func() { _ = cmd.Wait() }() // reap the child
+}
+
 func (a *App) renderSidebar() {
 	var b strings.Builder
 	lastServer := ""
@@ -588,7 +743,9 @@ func (a *App) renderChat() {
 			fmt.Fprintf(&b, "%s %s %s\n",
 				tsStyle.Render(ts),
 				nickStyle.Render(fmt.Sprintf("%-14s", l.Nick)),
-				irc.FormatText(l.Text))
+				link.Style(irc.FormatText(l.Text), func(s string) string {
+					return linkStyle.Render(s)
+				}))
 		case store.KindAction:
 			fmt.Fprintf(&b, "%s %s\n", tsStyle.Render(ts),
 				sysStyle.Render("* "+l.Nick+" ")+irc.FormatStyled(l.Text, sysStyle))
@@ -603,6 +760,14 @@ func (a *App) renderChat() {
 	}
 	a.chat.SetContent(b.String())
 	a.chat.GotoBottom()
+	// Mirror the content lines without ANSI so linkAt can map clicks to
+	// URLs; the split matches viewport.SetContent exactly.
+	rows := strings.Split(b.String(), "\n")
+	plain := make([]string, len(rows))
+	for i, r := range rows {
+		plain[i] = stripANSI(r)
+	}
+	a.chatContentRows = plain
 }
 
 func (a *App) resize() {

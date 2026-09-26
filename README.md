@@ -16,6 +16,7 @@ Split-view TUI, TLS connections, and first-class ZNC/bouncer support.
 - Channel topic panel pinned above the chat feed (`/topic [new topic]`)
 - Inline image previews: image URLs in chat render as half-block art
   (chafa-style), fetched in the background — works in any terminal
+- Clickable links: URLs render underlined; click one to open it in your browser
 - TLS, with `insecure_skip_verify` for self-signed certs
 
 ## Build

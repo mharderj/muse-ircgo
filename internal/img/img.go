@@ -15,11 +15,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 
 	_ "golang.org/x/image/webp"
+
+	"ircgo/internal/link"
 )
 
 const (
@@ -28,15 +29,12 @@ const (
 	maxURLsPerMsg = 2
 )
 
-var urlRe = regexp.MustCompile(`https?://[^\s<>"']+`)
-
 var imgExts = []string{".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 // FindURLs returns up to maxURLsPerMsg image URLs found in text.
 func FindURLs(text string) []string {
 	var out []string
-	for _, raw := range urlRe.FindAllString(text, -1) {
-		u := strings.TrimRight(raw, ".,;:!?)")
+	for _, u := range link.FindAll(text) {
 		if !isImageURL(u) {
 			continue
 		}
