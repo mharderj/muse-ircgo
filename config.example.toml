@@ -1,6 +1,12 @@
 # ircgo example configuration.
 # Copy to ~/.config/ircclient/config.toml and edit.
 
+# Channel logging: every channel/query buffer is appended to one log file
+# under ~/.local/ircgo/logs/<server>/<channel>.log. When a buffer is first
+# opened, the last history_playback lines are replayed into it.
+# Set to 0 to disable playback (logging still continues).
+history_playback = 50
+
 [ui]
 timestamp_format = "15:04"
 sidebar_width = 26

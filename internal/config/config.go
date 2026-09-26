@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -13,6 +15,48 @@ import (
 type Config struct {
 	Servers []Server `toml:"server"`
 	UI      UIConfig `toml:"ui"`
+
+	// HistoryPlayback is the history_playback setting: how many lines of
+	// local channel log are replayed into a buffer when it is created.
+	HistoryPlayback PlaybackLines `toml:"history_playback"`
+}
+
+// DefaultHistoryLines is the playback depth when history_playback is unset.
+const DefaultHistoryLines = 50
+
+// PlaybackLines is a history_playback value: a line count given as a TOML
+// number or a numeric string (both 50 and "50" work).
+type PlaybackLines struct {
+	Set   bool
+	Lines int
+}
+
+// UnmarshalTOML implements toml.Unmarshaler.
+func (p *PlaybackLines) UnmarshalTOML(v interface{}) error {
+	switch n := v.(type) {
+	case int64:
+		p.Set, p.Lines = true, int(n)
+	case string:
+		i, err := strconv.Atoi(strings.TrimSpace(n))
+		if err != nil {
+			return fmt.Errorf("history_playback: %q is not a number", n)
+		}
+		p.Set, p.Lines = true, i
+	default:
+		return fmt.Errorf("history_playback: expected a number, got %T", v)
+	}
+	if p.Lines < 0 {
+		p.Lines = 0
+	}
+	return nil
+}
+
+// HistoryLines returns the configured playback depth in lines.
+func (c *Config) HistoryLines() int {
+	if !c.HistoryPlayback.Set {
+		return DefaultHistoryLines
+	}
+	return c.HistoryPlayback.Lines
 }
 
 // UIConfig holds cosmetic preferences.

@@ -17,6 +17,10 @@ Split-view TUI, TLS connections, and first-class ZNC/bouncer support.
 - Inline image previews: image URLs in chat render as half-block art
   (chafa-style), fetched in the background — works in any terminal
 - Clickable links: URLs render underlined; click one to open it in your browser
+- Channel logging: each channel/query buffer logs to one file under
+  `~/.local/ircgo/logs/<server>/<channel>.log`; the last `history_playback`
+  lines (default 50, set `history_playback = 0` to disable) replay into a
+  buffer when it is first opened
 - TLS, with `insecure_skip_verify` for self-signed certs
 
 ## Build

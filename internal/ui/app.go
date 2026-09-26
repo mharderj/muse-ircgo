@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"ircgo/internal/config"
+	"ircgo/internal/history"
 	"ircgo/internal/img"
 	"ircgo/internal/irc"
 	"ircgo/internal/link"
@@ -207,7 +208,26 @@ func (a *App) addLine(server, target string, l store.Line) {
 		// param); file it in the server window instead.
 		target = server
 	}
-	a.st.Get(server, target).Append(l)
+	isNew := !a.st.Has(server, target)
+	buf := a.st.Get(server, target)
+	if isNew {
+		a.playbackHistory(server, target, buf)
+	}
+	buf.Append(l)
+	if text, ok := history.FormatLine(l); ok {
+		history.AppendLine(server, target, text)
+	}
+}
+
+// playbackHistory replays the tail of the buffer's local log into a newly
+// created buffer, oldest first. Played-back lines are already in the log,
+// so they are appended directly without re-logging.
+func (a *App) playbackHistory(server, target string, buf *store.Buffer) {
+	for _, raw := range history.LastLines(server, target, a.cfg.HistoryLines()) {
+		if l, ok := history.ParseLine(raw); ok {
+			buf.Append(l)
+		}
+	}
 }
 
 func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
