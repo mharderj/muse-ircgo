@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"ircgo/internal/config"
+	"ircgo/internal/img"
 	"ircgo/internal/irc"
 	"ircgo/internal/store"
 	"ircgo/internal/version"
@@ -23,6 +25,13 @@ type ircEventMsg struct{ ev irc.Event }
 
 // eventsClosedMsg fires when the event channel is closed.
 type eventsClosedMsg struct{}
+
+// imageFetchedMsg arrives when a background image fetch finishes; art is
+// empty when the fetch failed.
+type imageFetchedMsg struct {
+	server, buf, url string
+	art              string
+}
 
 // waitForEvents returns a Cmd that yields the next IRC event.
 func waitForEvents(ch <-chan irc.Event) tea.Cmd {
@@ -48,7 +57,14 @@ var (
 	nicksStyle = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder(), false, false, false, true).
 			BorderForeground(lipgloss.Color("8"))
+	topicStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8")).
+			Border(lipgloss.NormalBorder(), false, false, true, false).
+			BorderForeground(lipgloss.Color("8"))
 )
+
+// topicBarHeight is the topic panel height: one text row plus a divider.
+const topicBarHeight = 2
 
 // App is the root Bubble Tea model.
 type App struct {
@@ -61,6 +77,10 @@ type App struct {
 	focus int
 
 	members map[string]*memberSet
+
+	// Image previews: fetched art by URL, and URLs currently fetching.
+	imgCache    map[string]string
+	imgInflight map[string]bool
 
 	sidebar viewport.Model
 	chat    viewport.Model
@@ -81,8 +101,10 @@ func New(cfg *config.Config, st *store.Store, events <-chan irc.Event, clients m
 	ti.Focus()
 	return &App{
 		cfg: cfg, st: st, events: events, clients: clients,
-		input:   ti,
-		members: map[string]*memberSet{},
+		input:       ti,
+		members:     map[string]*memberSet{},
+		imgCache:    map[string]string{},
+		imgInflight: map[string]bool{},
 	}
 }
 
@@ -100,8 +122,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case eventsClosedMsg:
 		return a, tea.Quit
 	case ircEventMsg:
-		a.handleEvent(msg.ev)
-		return a, waitForEvents(a.events)
+		return a, tea.Batch(a.handleEvent(msg.ev), waitForEvents(a.events))
+	case imageFetchedMsg:
+		a.handleImageFetched(msg)
+		return a, nil
 	case tea.MouseMsg:
 		// Left-click a sidebar buffer to switch to it. All other mouse
 		// input is swallowed so clicks don't land in the input line.
@@ -138,8 +162,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, cmd
 }
 
-// handleEvent files a protocol event into scrollback and re-renders.
-func (a *App) handleEvent(ev irc.Event) {
+// handleEvent files a protocol event into scrollback and re-renders,
+// returning any follow-up command (e.g. image preview fetches).
+func (a *App) handleEvent(ev irc.Event) tea.Cmd {
+	var cmd tea.Cmd
 	switch ev.Kind {
 	case irc.KindConnected:
 		a.addLine(ev.Server, ev.Server, store.Line{At: time.Now(), Text: "connected", Kind: store.KindSystem})
@@ -148,7 +174,7 @@ func (a *App) handleEvent(ev irc.Event) {
 	case irc.KindError:
 		a.addLine(ev.Server, ev.Server, store.Line{At: time.Now(), Text: "error: " + ev.Text, Kind: store.KindSystem})
 	case irc.KindMessage:
-		a.handleMessage(ev.Server, ev.Msg)
+		cmd = a.handleMessage(ev.Server, ev.Msg)
 	}
 	a.bufs = a.st.Buffers()
 	a.renderSidebar()
@@ -156,6 +182,7 @@ func (a *App) handleEvent(ev irc.Event) {
 		a.renderChat()
 		a.renderNicks()
 	}
+	return cmd
 }
 
 func (a *App) addLine(server, target string, l store.Line) {
@@ -167,7 +194,7 @@ func (a *App) addLine(server, target string, l store.Line) {
 	a.st.Get(server, target).Append(l)
 }
 
-func (a *App) handleMessage(server string, m *irc.Message) {
+func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 	// Prefer the server-time tag (bouncer backlog) over wall-clock time,
 	// then display in local time: server-time arrives as UTC.
 	at := m.Time()
@@ -180,7 +207,7 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 	switch m.Command {
 	case "PRIVMSG":
 		if len(m.Params) < 2 {
-			return
+			return nil
 		}
 		target, text := m.Params[0], m.Params[1]
 		buf := target
@@ -216,6 +243,10 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 			}
 		}
 		a.addLine(server, buf, store.Line{At: at, Nick: nick, Text: text, Kind: kind})
+		if kind == store.KindChat {
+			return a.queueImageFetches(server, buf, text)
+		}
+		return nil
 	case "NOTICE":
 		text := m.Trailing()
 		kind := store.KindNotice
@@ -237,17 +268,19 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 			}
 		}
 		a.addLine(server, target, store.Line{At: at, Nick: nick, Text: text, Kind: kind})
-	case "JOIN":
+	case "TOPIC":
 		if len(m.Params) < 1 {
-			return
+			return nil
 		}
 		ch := m.Params[0]
-		// A bare "#" or "&" is never a real channel; ZNC's chansaver
-		// can replay one if it was ever saved by accident. Ignore it
-		// rather than opening a junk buffer.
-		if ch == "#" || ch == "&" {
-			return
+		topic := m.Trailing()
+		a.st.Get(server, ch).Topic = topic
+		a.addLine(server, ch, store.Line{At: at, Nick: nick, Text: "changed the topic to: " + topic, Kind: store.KindSystem})
+	case "JOIN":
+		if len(m.Params) < 1 {
+			return nil
 		}
+		ch := m.Params[0]
 		a.addLine(server, ch, store.Line{At: at, Nick: nick, Text: "joined " + ch, Kind: store.KindJoin})
 		if isChannel(ch) {
 			a.memberAdd(server, ch, nick, "")
@@ -294,6 +327,11 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 			case "353":
 				// RPL_NAMREPLY: track membership, keep it out of scrollback.
 				a.handleNames(server, m.Trailing(), m.Params)
+			case "332":
+				// RPL_TOPIC: params are [nick, channel], trailing is the topic.
+				if len(m.Params) > 1 {
+					a.st.Get(server, m.Params[1]).Topic = m.Trailing()
+				}
 			case "366":
 				// RPL_ENDOFNAMES: roster complete; refresh the pane.
 				a.renderNicks()
@@ -312,6 +350,58 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 				a.addLine(server, server, store.Line{At: at, Text: text, Kind: store.KindSystem})
 			}
 		}
+	}
+	return nil
+}
+
+// queueImageFetches starts background fetches for image URLs in a chat
+// message. Each fetch renders half-block art and reports back as an
+// imageFetchedMsg; already-cached or in-flight URLs are skipped.
+func (a *App) queueImageFetches(server, buf, text string) tea.Cmd {
+	w := a.chat.Width - 2 // leave room for the indent
+	if w > 48 {
+		w = 48
+	}
+	if w < 8 {
+		w = 8
+	}
+	var cmds []tea.Cmd
+	for _, u := range img.FindURLs(text) {
+		if _, ok := a.imgCache[u]; ok {
+			continue
+		}
+		if a.imgInflight[u] {
+			continue
+		}
+		a.imgInflight[u] = true
+		url := u
+		cmds = append(cmds, func() tea.Msg {
+			m, err := img.Fetch(context.Background(), url)
+			if err != nil {
+				return imageFetchedMsg{server: server, buf: buf, url: url}
+			}
+			return imageFetchedMsg{server: server, buf: buf, url: url, art: img.Render(m, w, 12)}
+		})
+	}
+	return tea.Batch(cmds...)
+}
+
+// handleImageFetched files a finished preview into scrollback. Failures
+// (empty art) are cached so a URL isn't refetched every time it appears.
+func (a *App) handleImageFetched(msg imageFetchedMsg) {
+	delete(a.imgInflight, msg.url)
+	a.imgCache[msg.url] = msg.art
+	if msg.art == "" {
+		return
+	}
+	// The buffer may be gone (parted while fetching): don't resurrect it.
+	if !a.st.Has(msg.server, msg.buf) {
+		return
+	}
+	a.addLine(msg.server, msg.buf, store.Line{At: time.Now(), Text: msg.art, Kind: store.KindImage})
+	a.bufs = a.st.Buffers()
+	if a.ready {
+		a.renderChat()
 	}
 }
 
@@ -444,6 +534,40 @@ func (a *App) renderSidebar() {
 	a.sidebar.SetContent(b.String())
 }
 
+// topicVisible reports whether the focused buffer gets a topic panel:
+// channel buffers only.
+func (a *App) topicVisible() bool {
+	if len(a.bufs) == 0 || a.focus >= len(a.bufs) {
+		return false
+	}
+	return isChannel(a.bufs[a.focus].Name)
+}
+
+// topicBar renders the focused channel's topic as a small panel above the
+// chat feed. mIRC formatting codes in the topic are rendered, not leaked.
+func (a *App) topicBar() string {
+	b := a.bufs[a.focus]
+	topic := b.Topic
+	if topic == "" {
+		topic = "no topic"
+	}
+	w := a.chat.Width
+	label := "Topic: "
+	topic = truncateRunes(topic, max(w-len(label), 0))
+	return topicStyle.Width(w).Render(label + irc.FormatText(topic))
+}
+
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	if n <= 1 {
+		return ""
+	}
+	return string(r[:n-1]) + "…"
+}
+
 func (a *App) renderChat() {
 	if len(a.bufs) == 0 {
 		a.chat.SetContent("connecting…")
@@ -465,6 +589,11 @@ func (a *App) renderChat() {
 		case store.KindAction:
 			fmt.Fprintf(&b, "%s %s\n", tsStyle.Render(ts),
 				sysStyle.Render("* "+l.Nick+" ")+irc.FormatStyled(l.Text, sysStyle))
+		case store.KindImage:
+			// Half-block art rows are pre-wrapped; indent under the message.
+			for _, row := range strings.Split(l.Text, "\n") {
+				fmt.Fprintf(&b, "  %s\n", row)
+			}
 		default:
 			fmt.Fprintf(&b, "%s %s\n", tsStyle.Render(ts), sysStyle.Render(l.Text))
 		}
@@ -484,6 +613,9 @@ func (a *App) resize() {
 		chatW = 20
 	}
 	chatH := a.height - 2 // input line + status line
+	if a.topicVisible() {
+		chatH -= topicBarHeight
+	}
 	if chatH < 5 {
 		chatH = 5
 	}
@@ -502,7 +634,7 @@ func (a *App) View() string {
 	}
 	main := lipgloss.JoinHorizontal(lipgloss.Top,
 		sidebarStyle.Render(a.sidebar.View()),
-		a.chat.View(),
+		a.chatColumn(),
 	)
 	if a.nickPaneWidth() > 0 {
 		main = lipgloss.JoinHorizontal(lipgloss.Top,
@@ -512,6 +644,15 @@ func (a *App) View() string {
 	}
 	body := lipgloss.JoinVertical(lipgloss.Left, main, a.input.View())
 	return lipgloss.JoinVertical(lipgloss.Left, body, a.statusLine())
+}
+
+// chatColumn stacks the topic panel above the chat viewport when the
+// focused buffer is a channel.
+func (a *App) chatColumn() string {
+	if a.topicVisible() {
+		return lipgloss.JoinVertical(lipgloss.Left, a.topicBar(), a.chat.View())
+	}
+	return a.chat.View()
 }
 
 func (a *App) statusLine() string {
@@ -545,7 +686,7 @@ func (a *App) sendInput(v string) tea.Cmd {
 	_ = cl.Send("PRIVMSG " + target + " :" + v)
 	a.addLine(buf.Server, target, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: v, Kind: store.KindChat})
 	a.renderChat()
-	return nil
+	return a.queueImageFetches(buf.Server, target, v)
 }
 
 func (a *App) ownNick(server string) string {
@@ -582,6 +723,7 @@ func (a *App) sendCommand(cl *irc.Client, buf *store.Buffer, v string) tea.Cmd {
 			a.bufs = a.st.Buffers()
 			a.renderSidebar()
 			a.renderChat()
+			return a.queueImageFetches(buf.Server, to, text)
 		}
 	case "/ctcp":
 		// /ctcp <target> <command> [args] -> PRIVMSG target :\x01COMMAND args\x01
@@ -602,6 +744,16 @@ func (a *App) sendCommand(cl *irc.Client, buf *store.Buffer, v string) tea.Cmd {
 		}
 	case "/quit", "/q":
 		return tea.Quit
+	case "/topic":
+		// /topic [new topic]: with text, set the channel topic;
+		// without, ask the server for it (replies with 332).
+		if isChannel(buf.Name) {
+			if len(parts) > 1 {
+				_ = cl.Send("TOPIC " + buf.Name + " :" + strings.Join(parts[1:], " "))
+			} else {
+				_ = cl.Send("TOPIC " + buf.Name)
+			}
+		}
 	}
 	return nil
 }

@@ -17,6 +17,7 @@ const (
 	KindNotice
 	KindAction
 	KindSystem
+	KindImage // rendered image preview (half-block art)
 )
 
 // Line is one rendered row in a buffer.
@@ -34,6 +35,7 @@ const maxLines = 5000
 type Buffer struct {
 	Server string
 	Name   string
+	Topic  string // channel topic, from RPL_TOPIC (332) / TOPIC
 	lines  []Line
 }
 
@@ -87,6 +89,14 @@ func (s *Store) Buffers() []*Buffer {
 	out := make([]*Buffer, len(s.order))
 	copy(out, s.order)
 	return out
+}
+
+// Has reports whether a buffer exists.
+func (s *Store) Has(server, name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.buffers[key(server, name)]
+	return ok
 }
 
 // Remove drops a buffer, e.g. after parting a channel.

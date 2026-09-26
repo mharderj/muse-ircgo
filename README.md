@@ -13,6 +13,9 @@ Split-view TUI, TLS connections, and first-class ZNC/bouncer support.
 - ZNC/bouncer support with `server-time` backlog timestamps
 - mIRC formatting rendered inline (colors, bold, italic, underline)
 - Lossless event delivery: replay bursts apply backpressure instead of dropping messages
+- Channel topic panel pinned above the chat feed (`/topic [new topic]`)
+- Inline image previews: image URLs in chat render as half-block art
+  (chafa-style), fetched in the background — works in any terminal
 - TLS, with `insecure_skip_verify` for self-signed certs
 
 ## Build
@@ -54,6 +57,7 @@ internal/irc         protocol layer
   sasl.go              SASL PLAIN
   debug.go             redacted connection diagnostics
 internal/store       per-buffer scrollback (channels, queries, server windows)
+internal/img         image URL detection, background fetch, half-block rendering
 internal/ui          Bubble Tea models: sidebar, chat viewport, nick list,
                    input, status bar
   members.go         channel membership tracking (NAMES, JOIN/PART/QUIT/NICK)
@@ -69,7 +73,7 @@ internal/version     release version (`-version`, CTCP VERSION replies)
 Quit with `/quit` (or `/q`) — `ctrl+c` no longer closes the app.
 
 Slash commands: `/join #chan`, `/part [#chan]`, `/msg nick text`,
-`/ctcp nick command [args]`, `/quit` (or `/q`).
+`/topic [new topic]`, `/ctcp nick command [args]`, `/quit` (or `/q`).
 
 CTCP is supported: `/me`-style actions render inline, incoming queries
 (`VERSION`, `PING`, `TIME`, `FINGER`, `USERINFO`, `CLIENTINFO`) are answered
