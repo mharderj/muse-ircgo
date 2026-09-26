@@ -2,6 +2,7 @@
 package store
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -97,6 +98,23 @@ func (s *Store) Has(server, name string) bool {
 	defer s.mu.Unlock()
 	_, ok := s.buffers[key(server, name)]
 	return ok
+}
+
+// Resolve returns the stored spelling of a buffer name when a
+// case-insensitive match already exists, or name unchanged. IRC nick and
+// channel names are case-insensitive ("Belial" and "belial" are the same
+// peer), so without this a reply can open a second buffer next to the one
+// you messaged. Server windows (name == server) never match: a nick that
+// merely resembles a server name must not capture the server window.
+func (s *Store) Resolve(server, name string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, b := range s.order {
+		if b.Server == server && b.Name != server && strings.EqualFold(b.Name, name) {
+			return b.Name
+		}
+	}
+	return name
 }
 
 // Remove drops a buffer, e.g. after parting a channel.

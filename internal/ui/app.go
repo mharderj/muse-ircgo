@@ -228,6 +228,9 @@ func (a *App) addLine(server, target string, l store.Line) {
 		// param); file it in the server window instead.
 		target = server
 	}
+	// IRC names are case-insensitive: file "Belial" under the existing
+	// "belial" buffer instead of opening a second one.
+	target = a.st.Resolve(server, target)
 	isNew := !a.st.Has(server, target)
 	buf := a.st.Get(server, target)
 	if isNew {
@@ -330,7 +333,7 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 		}
 		ch := m.Params[0]
 		topic := m.Trailing()
-		a.st.Get(server, ch).Topic = topic
+		a.st.Get(server, a.st.Resolve(server, ch)).Topic = topic
 		a.addLine(server, ch, store.Line{At: at, Nick: nick, Text: "changed the topic to: " + topic, Kind: store.KindSystem})
 	case "JOIN":
 		if len(m.Params) < 1 {
@@ -435,7 +438,7 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 			case "332":
 				// RPL_TOPIC: params are [nick, channel], trailing is the topic.
 				if len(m.Params) > 1 {
-					a.st.Get(server, m.Params[1]).Topic = m.Trailing()
+					a.st.Get(server, a.st.Resolve(server, m.Params[1])).Topic = m.Trailing()
 				}
 			case "366":
 				// RPL_ENDOFNAMES: roster complete; refresh the pane.
