@@ -215,7 +215,7 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 				}
 			}
 		}
-		a.addLine(server, buf, store.Line{At: at, Nick: nick, Text: text, Kind: kind})
+		a.addLine(server, buf, store.Line{At: at, Nick: nick, Text: irc.StripFormatting(text), Kind: kind})
 	case "NOTICE":
 		text := m.Trailing()
 		kind := store.KindNotice
@@ -236,7 +236,7 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 				target = a.bufs[a.focus].Name
 			}
 		}
-		a.addLine(server, target, store.Line{At: at, Nick: nick, Text: text, Kind: kind})
+		a.addLine(server, target, store.Line{At: at, Nick: nick, Text: irc.StripFormatting(text), Kind: kind})
 	case "JOIN":
 		if len(m.Params) < 1 {
 			return
