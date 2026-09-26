@@ -12,6 +12,7 @@ Split-view TUI, TLS connections, and first-class ZNC/bouncer support.
 - CTCP queries answered automatically (`VERSION`, `PING`, `TIME`, …)
 - ZNC/bouncer support with `server-time` backlog timestamps
 - mIRC formatting rendered inline (colors, bold, italic, underline)
+- Lossless event delivery: replay bursts apply backpressure instead of dropping messages
 - TLS, with `insecure_skip_verify` for self-signed certs
 
 ## Build

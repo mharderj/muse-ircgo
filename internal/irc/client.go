@@ -51,6 +51,7 @@ type Client struct {
 	mu         sync.Mutex
 	conn       *Conn
 	capOffered map[string]bool
+	ctx        context.Context // connection lifetime, set by Run
 }
 
 // New returns a client that publishes events to the channel.
@@ -60,10 +61,22 @@ func New(cfg config.Server, events chan<- Event) *Client {
 
 func (c *Client) emit(e Event) {
 	e.Server = c.cfg.Name
+	ctx := c.ctx
+	if ctx == nil {
+		// Not running under Run (shouldn't happen): never block.
+		select {
+		case c.events <- e:
+		default:
+		}
+		return
+	}
+	// Block until the UI receives the event rather than silently dropping
+	// backlog (e.g. a ZNC replay burst bigger than the channel buffer).
+	// Give up if the connection is torn down so a wedged UI can't hang
+	// shutdown.
 	select {
 	case c.events <- e:
-	default:
-		// Never block the read loop on a slow UI.
+	case <-ctx.Done():
 	}
 }
 
@@ -80,6 +93,7 @@ func (c *Client) Send(line string) error {
 // Run connects, registers, and pumps messages until ctx is cancelled or the
 // connection drops.
 func (c *Client) Run(ctx context.Context) {
+	c.ctx = ctx
 	conn, err := Dial(c.cfg.Name, c.cfg.Host, c.port(), c.cfg.TLS, c.cfg.InsecureSkipVerify)
 	if err != nil {
 		c.emit(Event{Kind: KindError, Text: fmt.Sprintf("dial %s: %v", c.cfg.Addr(), err)})
