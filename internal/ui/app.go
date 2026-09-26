@@ -233,6 +233,12 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 			return
 		}
 		ch := m.Params[0]
+		// A bare "#" or "&" is never a real channel; ZNC's chansaver
+		// can replay one if it was ever saved by accident. Ignore it
+		// rather than opening a junk buffer.
+		if ch == "#" || ch == "&" {
+			return
+		}
 		a.addLine(server, ch, store.Line{At: at, Nick: nick, Text: "joined " + ch, Kind: store.KindJoin})
 		if isChannel(ch) {
 			a.memberAdd(server, ch, nick, "")
@@ -252,6 +258,10 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 		if isChannel(ch) {
 			a.memberRemove(server, ch, nick)
 			a.renderNicks()
+			if nick == a.ownNick(server) {
+				// We left: drop the buffer so the sidebar cleans up.
+				a.st.Remove(server, ch)
+			}
 		}
 	case "QUIT":
 		a.addLine(server, server, store.Line{At: at, Nick: nick, Text: "quit: " + m.Trailing(), Kind: store.KindQuit})

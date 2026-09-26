@@ -88,3 +88,20 @@ func (s *Store) Buffers() []*Buffer {
 	copy(out, s.order)
 	return out
 }
+
+// Remove drops a buffer, e.g. after parting a channel.
+func (s *Store) Remove(server, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := key(server, name)
+	if _, ok := s.buffers[k]; !ok {
+		return
+	}
+	delete(s.buffers, k)
+	for i, b := range s.order {
+		if b.Server == server && b.Name == name {
+			s.order = append(s.order[:i], s.order[i+1:]...)
+			return
+		}
+	}
+}
