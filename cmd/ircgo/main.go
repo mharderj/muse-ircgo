@@ -63,7 +63,9 @@ func main() {
 		go cl.Run(ctx)
 	}
 
-	p := tea.NewProgram(ui.New(cfg, st, events, clients),
+	app := ui.New(cfg, st, events, clients)
+	app.ConfigPath = *cfgPath
+	p := tea.NewProgram(app,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(), // click sidebar buffers to switch
 	)

@@ -97,6 +97,10 @@ type App struct {
 	events  <-chan irc.Event
 	clients map[string]*irc.Client
 
+	// ConfigPath is the path to config.toml, used to persist last_buffer
+	// on quit. Empty means don't persist (e.g. in tests).
+	ConfigPath string
+
 	bufs  []*store.Buffer
 	focus int
 
@@ -121,9 +125,19 @@ type App struct {
 	// stripped, index-aligned with them, so clicks can be mapped to URLs.
 	chatContentRows []string
 
+	// pendingFocus is the buffer to focus once it appears, used by the
+	// startup restore: channels don't exist until JOIN creates them. A
+	// manual buffer switch clears it.
+	pendingFocus lastFocus
+
 	width  int
 	height int
 	ready  bool
+}
+
+// lastFocus identifies a buffer to focus.
+type lastFocus struct {
+	server, name string
 }
 
 // New builds the root model. Event flow: the IRC clients publish to events,
@@ -150,6 +164,12 @@ func (a *App) Init() tea.Cmd {
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.QuitMsg:
+		// Remember the focused buffer for the next launch. This is the
+		// only disk write for last-buffer state: focus switches don't
+		// touch the disk.
+		a.saveLastBuffer()
+		return a, tea.Quit
 	case tea.WindowSizeMsg:
 		first := !a.ready
 		a.width, a.height = msg.Width, msg.Height
@@ -161,6 +181,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// First layout: the chat width is now real, so restored buffers
 		// regenerate image previews at the right size.
 		cmd := a.restoreQueryBuffers()
+		a.restoreLastFocus()
 		a.renderSidebar()
 		a.renderChat()
 		return a, cmd
@@ -875,6 +896,18 @@ func (a *App) refreshBuffers() {
 			break
 		}
 	}
+	// Startup restore: focus the remembered buffer as soon as it appears
+	// (channels are created on JOIN, after the restore ran).
+	if pf := a.pendingFocus; pf.server != "" {
+		name := a.st.Resolve(pf.server, pf.name)
+		for i, b := range a.bufs {
+			if b.Server == pf.server && b.Name == name {
+				a.setFocus(i)
+				a.pendingFocus = lastFocus{}
+				break
+			}
+		}
+	}
 }
 
 // sidebarDivider renders the rule separating a server's channels from its
@@ -1147,10 +1180,54 @@ func (a *App) focusBuffer(i int) {
 	if i < 0 || i >= len(a.bufs) {
 		return
 	}
+	a.setFocus(i)
+	// A manual switch cancels any pending startup restore. The focused
+	// buffer is only written to disk on quit (see the QuitMsg case).
+	a.pendingFocus = lastFocus{}
+}
+
+// setFocus moves focus without side effects: no persistence, no restore
+// cancellation. The startup restore path uses it so the restored buffer
+// doesn't rewrite the very state being restored.
+func (a *App) setFocus(i int) {
 	a.focus = i
 	a.bufs[i].Unread = 0
 	// Re-lay out, since the nick pane only appears for channel buffers.
 	a.resize()
+}
+
+// saveLastBuffer records the focused buffer in the config file so the next
+// launch can restore it. It runs once on quit; focus switches don't touch
+// the disk.
+func (a *App) saveLastBuffer() {
+	if a.ConfigPath == "" || a.focus < 0 || a.focus >= len(a.bufs) {
+		return
+	}
+	b := a.bufs[a.focus]
+	_ = config.WriteLastBuffer(a.ConfigPath, b.Server, b.Name)
+}
+
+// restoreLastFocus focuses the buffer that was focused when the app last
+// quit (from the config's last_buffer). Buffers that don't exist yet
+// (channels waiting on JOIN, the server window waiting on connect) are
+// remembered in pendingFocus and picked up by refreshBuffers when they
+// appear.
+func (a *App) restoreLastFocus() {
+	if len(a.cfg.LastBuffer) != 2 {
+		return
+	}
+	server, name := a.cfg.LastBuffer[0], a.cfg.LastBuffer[1]
+	if server == "" || name == "" {
+		return
+	}
+	name = a.st.Resolve(server, name)
+	for i, b := range a.bufs {
+		if b.Server == server && b.Name == name {
+			a.setFocus(i)
+			return
+		}
+	}
+	a.pendingFocus = lastFocus{server: server, name: name}
 }
 
 // restoreQueryBuffers recreates query (DM) buffers from their log files on

@@ -19,6 +19,11 @@ type Config struct {
 	// HistoryPlayback is the history_playback setting: how many lines of
 	// local channel log are replayed into a buffer when it is created.
 	HistoryPlayback PlaybackLines `toml:"history_playback"`
+
+	// LastBuffer is the buffer focused when the app last quit, as
+	// [server, buffer]. The app writes it on exit; it is read on startup
+	// to restore focus.
+	LastBuffer []string `toml:"last_buffer"`
 }
 
 // DefaultHistoryLines is the playback depth when history_playback is unset.
@@ -161,4 +166,88 @@ func DefaultPath() string {
 		return "config.toml"
 	}
 	return filepath.Join(home, ".config", "ircclient", "config.toml")
+}
+
+// tomlString quotes s as a TOML basic string.
+func tomlString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, `\u%04X`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// isLastBufferKey reports whether a trimmed config line sets last_buffer.
+func isLastBufferKey(line string) bool {
+	rest, ok := strings.CutPrefix(line, "last_buffer")
+	if !ok {
+		return false
+	}
+	rest = strings.TrimSpace(rest)
+	return strings.HasPrefix(rest, "=")
+}
+
+// WriteLastBuffer records the focused buffer in the config file, preserving
+// comments and formatting: the existing last_buffer line is replaced in
+// place, or a new one is inserted before the first table header (top-level
+// keys must precede tables in TOML). A misplaced last_buffer inside a table
+// is dropped and re-written at the top level.
+func WriteLastBuffer(path, server, name string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	mode := os.FileMode(0o600)
+	if fi, err := os.Stat(path); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	newLine := "last_buffer = [" + tomlString(server) + ", " + tomlString(name) + "]"
+	var out []string
+	inTable, written := false, false
+	for _, l := range strings.SplitAfter(string(data), "\n") {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "[") {
+			if !written {
+				out = append(out, newLine+"\n")
+				written = true
+			}
+			inTable = true
+			out = append(out, l)
+			continue
+		}
+		if isLastBufferKey(t) {
+			if !inTable && !written {
+				out = append(out, newLine+"\n")
+				written = true
+			}
+			continue // drop the old line
+		}
+		out = append(out, l)
+	}
+	if !written {
+		if n := len(out); n > 0 && !strings.HasSuffix(out[n-1], "\n") {
+			out[n-1] += "\n"
+		}
+		out = append(out, newLine+"\n")
+	}
+	return os.WriteFile(path, []byte(strings.Join(out, "")), mode)
 }
