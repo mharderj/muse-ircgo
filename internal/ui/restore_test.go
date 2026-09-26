@@ -87,6 +87,24 @@ func TestRestoreQueryBuffers(t *testing.T) {
 	}
 }
 
+func TestFailedFetchIsNotCached(t *testing.T) {
+	a := kickTestApp()
+	url := "https://example.com/x.png"
+	a.handleImageFetched(imageFetchedMsg{server: "srv", buf: "b", url: url})
+	if _, ok := a.imgCache[url]; ok {
+		t.Fatal("failed fetch was cached, poisoning the URL for the session")
+	}
+	// A re-posted URL gets a fresh fetch attempt instead of a cache hit
+	// on the earlier failure.
+	cmd := a.queueImageFetches("srv", "b", "see "+url)
+	if cmd == nil {
+		t.Fatal("no fetch queued for re-posted URL")
+	}
+	if !a.imgInflight[url] {
+		t.Fatal("re-posted URL not marked in-flight")
+	}
+}
+
 func TestFirstWindowSizeRestoresQueries(t *testing.T) {
 	dir := t.TempDir()
 	a := newRestoreApp(t, dir)

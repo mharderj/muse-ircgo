@@ -143,3 +143,27 @@ func TestFetch(t *testing.T) {
 		t.Fatal("Fetch of 404, want error")
 	}
 }
+
+func TestFetchConcurrentDoesNotDeadlock(t *testing.T) {
+	m := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = png.Encode(w, m)
+	}))
+	defer srv.Close()
+
+	// More concurrent fetches than the semaphore allows: all must still
+	// complete, just serialized.
+	const n = 6
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			_, err := Fetch(context.Background(), srv.URL+"/tiny.png")
+			errs <- err
+		}()
+	}
+	for i := 0; i < n; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("Fetch: %v", err)
+		}
+	}
+}

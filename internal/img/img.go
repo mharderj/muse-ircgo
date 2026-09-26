@@ -60,10 +60,21 @@ func isImageURL(raw string) bool {
 	return false
 }
 
+// fetchSem caps concurrent image downloads. A reconnect replays the log
+// tail and would otherwise fire a fetch per historical image URL at once,
+// which is exactly how you get a CDN to rate-limit you into silent 429s.
+var fetchSem = make(chan struct{}, 3)
+
 // Fetch downloads and decodes an image, capped by size and time.
 func Fetch(ctx context.Context, rawURL string) (image.Image, error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
+	select {
+	case fetchSem <- struct{}{}:
+		defer func() { <-fetchSem }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err

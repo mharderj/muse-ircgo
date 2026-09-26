@@ -524,10 +524,12 @@ func (a *App) queueImageFetches(server, buf, text string) tea.Cmd {
 // (empty art) are cached so a URL isn't refetched every time it appears.
 func (a *App) handleImageFetched(msg imageFetchedMsg) {
 	delete(a.imgInflight, msg.url)
-	a.imgCache[msg.url] = msg.art
 	if msg.art == "" {
+		// Don't cache failures: a re-posted URL gets a fresh attempt
+		// instead of being poisoned for the rest of the session.
 		return
 	}
+	a.imgCache[msg.url] = msg.art
 	// The buffer may be gone (parted while fetching): don't resurrect it.
 	if !a.st.Has(msg.server, msg.buf) {
 		return
