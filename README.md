@@ -25,6 +25,8 @@ Split-view TUI, TLS connections, and first-class ZNC/bouncer support.
   in the sidebar without waiting for a new message
 - Image previews regenerate when a buffer is reopened: art is never logged,
   so URLs in the replayed history are re-fetched automatically
+- Sidebar ordering: server window, then channels, then a divider, then
+  query (DM) buffers underneath
 - TLS, with `insecure_skip_verify` for self-signed certs
 - Auto-reconnect with backoff when the connection drops
 - Nick collision fallback: a `433` at connect retries as `nick_`
@@ -97,7 +99,7 @@ Slash commands: `/join #chan`, `/part [#chan]`, `/msg nick text`, `/me text`,
 CTCP is supported: `/me`-style actions render inline, incoming queries
 (`VERSION`, `PING`, `TIME`, `FINGER`, `USERINFO`, `CLIENTINFO`) are answered
 automatically via NOTICE, and CTCP exchanges stay in the active buffer.
-`./ircgo -version` prints the release (currently v0.1.11).
+`./ircgo -version` prints the release (currently v0.1.12).
 
 A nick list appears on the right for channel buffers (ops first, then
 alphabetical), built from NAMES replies and JOIN/PART/QUIT/NICK updates.

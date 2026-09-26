@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -218,7 +219,7 @@ func (a *App) handleEvent(ev irc.Event) tea.Cmd {
 	case irc.KindMessage:
 		cmd = a.handleMessage(ev.Server, ev.Msg)
 	}
-	a.bufs = a.st.Buffers()
+	a.refreshBuffers()
 	a.renderSidebar()
 	if a.ready {
 		a.renderChat()
@@ -532,7 +533,7 @@ func (a *App) handleImageFetched(msg imageFetchedMsg) {
 		return
 	}
 	a.addLine(msg.server, msg.buf, store.Line{At: time.Now(), Text: msg.art, Kind: store.KindImage})
-	a.bufs = a.st.Buffers()
+	a.refreshBuffers()
 	if a.ready {
 		a.renderChat()
 	}
@@ -625,6 +626,7 @@ func (a *App) sidebarBufferAt(x, y int) (i int, ok bool) {
 	row := y + a.sidebar.YOffset // the sidebar viewport may be scrolled
 	r := 0
 	lastServer := ""
+	lastRank := -1
 	for idx, buf := range a.bufs {
 		if buf.Server != lastServer {
 			if lastServer != "" {
@@ -638,7 +640,15 @@ func (a *App) sidebarBufferAt(x, y int) (i int, ok bool) {
 			}
 			r++
 			lastServer = buf.Server
+			lastRank = -1
 		}
+		if rk := bufferRank(buf); rk == 2 && lastRank < 2 {
+			if r == row {
+				return 0, false // channel/query divider line
+			}
+			r++
+		}
+		lastRank = bufferRank(buf)
 		if r == row {
 			return idx, true
 		}
@@ -789,9 +799,57 @@ func openURL(url string) {
 	go func() { _ = cmd.Wait() }() // reap the child
 }
 
+// bufferRank orders buffers within a server group: the server window first,
+// then channels, then query (DM) buffers below a divider.
+func bufferRank(b *store.Buffer) int {
+	switch {
+	case b.Name == b.Server:
+		return 0
+	case isChannel(b.Name):
+		return 1
+	default:
+		return 2
+	}
+}
+
+// refreshBuffers rebuilds the sidebar buffer list, ordering each server's
+// buffers as server window, channels, then queries. Focus follows the
+// buffer by identity, so a newly created buffer slotting into its sorted
+// position can't steal focus from under you.
+func (a *App) refreshBuffers() {
+	var fs, fn string
+	if a.focus < len(a.bufs) {
+		fs, fn = a.bufs[a.focus].Server, a.bufs[a.focus].Name
+	}
+	a.bufs = a.st.Buffers()
+	sort.SliceStable(a.bufs, func(i, j int) bool {
+		if a.bufs[i].Server != a.bufs[j].Server {
+			return false
+		}
+		return bufferRank(a.bufs[i]) < bufferRank(a.bufs[j])
+	})
+	for i, b := range a.bufs {
+		if b.Server == fs && b.Name == fn {
+			a.focus = i
+			break
+		}
+	}
+}
+
+// sidebarDivider renders the rule separating a server's channels from its
+// query buffers.
+func (a *App) sidebarDivider() string {
+	w := a.sidebar.Width - 4
+	if w < 8 {
+		w = 12
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  " + strings.Repeat("─", w))
+}
+
 func (a *App) renderSidebar() {
 	var b strings.Builder
 	lastServer := ""
+	lastRank := -1
 	for i, buf := range a.bufs {
 		if buf.Server != lastServer {
 			if lastServer != "" {
@@ -799,7 +857,12 @@ func (a *App) renderSidebar() {
 			}
 			fmt.Fprintf(&b, "%s\n", lipgloss.NewStyle().Bold(true).Render(buf.Server))
 			lastServer = buf.Server
+			lastRank = -1
 		}
+		if r := bufferRank(buf); r == 2 && lastRank < 2 {
+			b.WriteString(a.sidebarDivider() + "\n")
+		}
+		lastRank = bufferRank(buf)
 		line := "  " + buf.Name
 		if i == a.focus {
 			line = lipgloss.NewStyle().Reverse(true).Render("> " + buf.Name)
@@ -1048,7 +1111,7 @@ func (a *App) restoreQueryBuffers() tea.Cmd {
 			cmds = append(cmds, a.playbackHistory(s.Name, name, a.st.Get(s.Name, name)))
 		}
 	}
-	a.bufs = a.st.Buffers()
+	a.refreshBuffers()
 	return tea.Batch(cmds...)
 }
 
@@ -1091,7 +1154,7 @@ func (a *App) sendCommand(cl *irc.Client, buf *store.Buffer, v string) tea.Cmd {
 			text := strings.Join(parts[2:], " ")
 			_ = cl.Send("PRIVMSG " + to + " :" + text)
 			addCmd := a.addLine(buf.Server, to, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: text, Kind: store.KindChat})
-			a.bufs = a.st.Buffers()
+			a.refreshBuffers()
 			a.renderSidebar()
 			a.renderChat()
 			return tea.Batch(addCmd, a.queueImageFetches(buf.Server, to, text))
@@ -1124,7 +1187,7 @@ func (a *App) sendCommand(cl *irc.Client, buf *store.Buffer, v string) tea.Cmd {
 			// Log the outgoing query in the active buffer instead of
 			// opening a buffer for the target.
 			a.addLine(buf.Server, buf.Name, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: "CTCP " + cmd + args + " -> " + to, Kind: store.KindNotice})
-			a.bufs = a.st.Buffers()
+			a.refreshBuffers()
 			a.renderSidebar()
 			a.renderChat()
 		}
