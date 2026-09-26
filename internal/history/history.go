@@ -42,7 +42,12 @@ func safeName(s string) string {
 
 // Path returns the log file for a buffer.
 func Path(server, target string) string {
-	return filepath.Join(LogDir, safeName(server), safeName(target)+".log")
+	return filepath.Join(ServerDir(server), safeName(target)+".log")
+}
+
+// ServerDir returns the directory holding a server's log files.
+func ServerDir(server string) string {
+	return filepath.Join(LogDir, safeName(server))
 }
 
 // FormatLine renders a scrollback line for the log. It returns false for

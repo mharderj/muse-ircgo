@@ -5,6 +5,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -138,10 +139,19 @@ func (a *App) Init() tea.Cmd {
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		first := !a.ready
 		a.width, a.height = msg.Width, msg.Height
 		a.ready = true
 		a.resize()
-		return a, nil
+		if !first {
+			return a, nil
+		}
+		// First layout: the chat width is now real, so restored buffers
+		// regenerate image previews at the right size.
+		cmd := a.restoreQueryBuffers()
+		a.renderSidebar()
+		a.renderChat()
+		return a, cmd
 	case eventsClosedMsg:
 		return a, tea.Quit
 	case ircEventMsg:
@@ -200,11 +210,11 @@ func (a *App) handleEvent(ev irc.Event) tea.Cmd {
 	var cmd tea.Cmd
 	switch ev.Kind {
 	case irc.KindConnected:
-		a.addLine(ev.Server, ev.Server, store.Line{At: time.Now(), Text: "connected", Kind: store.KindSystem})
+		cmd = a.addLine(ev.Server, ev.Server, store.Line{At: time.Now(), Text: "connected", Kind: store.KindSystem})
 	case irc.KindDisconnected:
-		a.addLine(ev.Server, ev.Server, store.Line{At: time.Now(), Text: "disconnected", Kind: store.KindSystem})
+		cmd = a.addLine(ev.Server, ev.Server, store.Line{At: time.Now(), Text: "disconnected", Kind: store.KindSystem})
 	case irc.KindError:
-		a.addLine(ev.Server, ev.Server, store.Line{At: time.Now(), Text: "error: " + ev.Text, Kind: store.KindSystem})
+		cmd = a.addLine(ev.Server, ev.Server, store.Line{At: time.Now(), Text: "error: " + ev.Text, Kind: store.KindSystem})
 	case irc.KindMessage:
 		cmd = a.handleMessage(ev.Server, ev.Msg)
 	}
@@ -217,7 +227,12 @@ func (a *App) handleEvent(ev irc.Event) tea.Cmd {
 	return cmd
 }
 
-func (a *App) addLine(server, target string, l store.Line) {
+// addLine files a line into a buffer, creating the buffer on first use. When
+// the buffer is new, the tail of its on-disk log is replayed first (so a
+// reopened query shows yesterday's conversation), and image previews for
+// URLs in the replayed lines are re-fetched, since art is never logged.
+// It returns any follow-up command (image preview fetches).
+func (a *App) addLine(server, target string, l store.Line) tea.Cmd {
 	if target == "" {
 		// Never create a nameless buffer (e.g. a PART with no channel
 		// param); file it in the server window instead.
@@ -228,24 +243,37 @@ func (a *App) addLine(server, target string, l store.Line) {
 	target = a.st.Resolve(server, target)
 	isNew := !a.st.Has(server, target)
 	buf := a.st.Get(server, target)
+	var cmd tea.Cmd
 	if isNew {
-		a.playbackHistory(server, target, buf)
+		cmd = a.playbackHistory(server, target, buf)
 	}
 	buf.Append(l)
 	if text, ok := history.FormatLine(l); ok {
 		history.AppendLine(server, target, text)
 	}
+	return cmd
 }
 
 // playbackHistory replays the tail of the buffer's local log into a newly
 // created buffer, oldest first. Played-back lines are already in the log,
-// so they are appended directly without re-logging.
-func (a *App) playbackHistory(server, target string, buf *store.Buffer) {
+// so they are appended directly without re-logging. It returns fetch
+// commands that regenerate image previews for URLs in the replayed lines:
+// art is never logged, so without this a reopened buffer would show bare
+// URLs where previews used to be.
+func (a *App) playbackHistory(server, target string, buf *store.Buffer) tea.Cmd {
 	for _, raw := range history.LastLines(server, target, a.cfg.HistoryLines()) {
 		if l, ok := history.ParseLine(raw); ok {
 			buf.Append(l)
 		}
 	}
+	var cmds []tea.Cmd
+	for _, l := range buf.Lines() {
+		switch l.Kind {
+		case store.KindChat, store.KindAction, store.KindNotice:
+			cmds = append(cmds, a.queueImageFetches(server, target, l.Text))
+		}
+	}
+	return tea.Batch(cmds...)
 }
 
 func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
@@ -296,12 +324,12 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 				}
 			}
 		}
-		a.addLine(server, buf, store.Line{At: at, Nick: nick, Text: text, Kind: kind})
+		addCmd := a.addLine(server, buf, store.Line{At: at, Nick: nick, Text: text, Kind: kind})
 		a.bumpUnread(server, buf, nick)
 		if kind == store.KindChat {
-			return a.queueImageFetches(server, buf, text)
+			return tea.Batch(addCmd, a.queueImageFetches(server, buf, text))
 		}
-		return nil
+		return addCmd
 	case "NOTICE":
 		text := m.Trailing()
 		kind := store.KindNotice
@@ -946,9 +974,9 @@ func (a *App) sendInput(v string) tea.Cmd {
 		return nil // nowhere to send from the server window
 	}
 	_ = cl.Send("PRIVMSG " + target + " :" + v)
-	a.addLine(buf.Server, target, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: v, Kind: store.KindChat})
+	addCmd := a.addLine(buf.Server, target, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: v, Kind: store.KindChat})
 	a.renderChat()
-	return a.queueImageFetches(buf.Server, target, v)
+	return tea.Batch(addCmd, a.queueImageFetches(buf.Server, target, v))
 }
 
 func (a *App) ownNick(server string) string {
@@ -986,6 +1014,42 @@ func (a *App) focusBuffer(i int) {
 	a.bufs[i].Unread = 0
 	// Re-lay out, since the nick pane only appears for channel buffers.
 	a.resize()
+}
+
+// restoreQueryBuffers recreates query (DM) buffers from their log files on
+// startup, so DMs are visible in the sidebar without waiting for a new
+// message. Channels are skipped: joined channels recreate their own
+// buffers on JOIN, and parted ones should stay gone. The server window is
+// skipped too: it's created on connect. It returns image-fetch commands so
+// previews regenerate for URLs in the restored scrollback.
+func (a *App) restoreQueryBuffers() tea.Cmd {
+	if history.LogDir == "" {
+		return nil
+	}
+	var cmds []tea.Cmd
+	for _, s := range a.cfg.Servers {
+		entries, err := os.ReadDir(history.ServerDir(s.Name))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".log") {
+				continue
+			}
+			name := strings.TrimSuffix(e.Name(), ".log")
+			if name == s.Name || isChannel(name) {
+				continue
+			}
+			// The log filename is the sanitized target name; for ordinary
+			// nicks that's the buffer name itself.
+			if a.st.Has(s.Name, name) {
+				continue
+			}
+			cmds = append(cmds, a.playbackHistory(s.Name, name, a.st.Get(s.Name, name)))
+		}
+	}
+	a.bufs = a.st.Buffers()
+	return tea.Batch(cmds...)
 }
 
 // bumpUnread flags unseen activity on a buffer. Our own messages and the
@@ -1026,20 +1090,20 @@ func (a *App) sendCommand(cl *irc.Client, buf *store.Buffer, v string) tea.Cmd {
 			to := parts[1]
 			text := strings.Join(parts[2:], " ")
 			_ = cl.Send("PRIVMSG " + to + " :" + text)
-			a.addLine(buf.Server, to, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: text, Kind: store.KindChat})
+			addCmd := a.addLine(buf.Server, to, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: text, Kind: store.KindChat})
 			a.bufs = a.st.Buffers()
 			a.renderSidebar()
 			a.renderChat()
-			return a.queueImageFetches(buf.Server, to, text)
+			return tea.Batch(addCmd, a.queueImageFetches(buf.Server, to, text))
 		}
 	case "/me":
 		// /me does an emote in the focused buffer (CTCP ACTION).
 		if len(parts) > 1 && buf.Name != buf.Server {
 			text := strings.Join(parts[1:], " ")
 			_ = cl.Send("PRIVMSG " + buf.Name + " :\x01ACTION " + text + "\x01")
-			a.addLine(buf.Server, buf.Name, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: text, Kind: store.KindAction})
+			addCmd := a.addLine(buf.Server, buf.Name, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: text, Kind: store.KindAction})
 			a.renderChat()
-			return a.queueImageFetches(buf.Server, buf.Name, text)
+			return tea.Batch(addCmd, a.queueImageFetches(buf.Server, buf.Name, text))
 		}
 	case "/nick":
 		// The server confirms with a NICK echo (or 433 -> "_" fallback);
