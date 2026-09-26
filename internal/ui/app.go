@@ -49,13 +49,16 @@ var (
 	nickStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true)
 	sysStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true)
 	sidebarStyle = lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder(), false, true, false, false).
+			Border(lipgloss.NormalBorder(), false, true, true, false).
 			BorderForeground(lipgloss.Color("8"))
 	statusStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("7")).
 			Background(lipgloss.Color("4"))
 	nicksStyle = lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder(), false, false, false, true).
+			Border(lipgloss.NormalBorder(), false, false, true, true).
+			BorderForeground(lipgloss.Color("8"))
+	chatBottomStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder(), false, false, true, false).
 			BorderForeground(lipgloss.Color("8"))
 	topicStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8")).
@@ -612,16 +615,19 @@ func (a *App) resize() {
 	if chatW < 20 {
 		chatW = 20
 	}
-	chatH := a.height - 2 // input line + status line
+	// When the topic panel is visible the middle column is taller; pad the
+	// sidebar and nick columns so all three bottom borders line up.
+	extra := 0
 	if a.topicVisible() {
-		chatH -= topicBarHeight
+		extra = topicBarHeight
 	}
+	chatH := a.height - 3 - extra // input line + status line + bottom divider
 	if chatH < 5 {
 		chatH = 5
 	}
-	a.sidebar = viewport.New(sw, chatH)
+	a.sidebar = viewport.New(sw, chatH+extra)
 	a.chat = viewport.New(chatW, chatH)
-	a.nicks = viewport.New(max(nw-1, 1), chatH)
+	a.nicks = viewport.New(max(nw-1, 1), chatH+extra)
 	a.input.Width = chatW - 2
 	a.renderSidebar()
 	a.renderChat()
@@ -634,7 +640,7 @@ func (a *App) View() string {
 	}
 	main := lipgloss.JoinHorizontal(lipgloss.Top,
 		sidebarStyle.Render(a.sidebar.View()),
-		a.chatColumn(),
+		chatBottomStyle.Render(a.chatColumn()),
 	)
 	if a.nickPaneWidth() > 0 {
 		main = lipgloss.JoinHorizontal(lipgloss.Top,
