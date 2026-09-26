@@ -36,26 +36,32 @@ cmd/ircgo            entrypoint: loads config, starts clients + TUI
 internal/config      TOML config loading and validation
 internal/irc         protocol layer
   message.go           IRCv3 parser (tags, prefix, params)
+  ctcp.go              CTCP detection and parsing
   conn.go              TCP / TLS dial, line I/O
   client.go            registration, read loop, event pump
   caps.go              CAP LS/REQ/ACK negotiation
   sasl.go              SASL PLAIN
+  debug.go             redacted connection diagnostics
 internal/store       per-buffer scrollback (channels, queries, server windows)
-internal/ui          Bubble Tea models: sidebar, chat viewport, input, status bar
+internal/ui          Bubble Tea models: sidebar, chat viewport, nick list,
+                   input, status bar
+  members.go         channel membership tracking (NAMES, JOIN/PART/QUIT/NICK)
+internal/version     release version (`-version`, CTCP VERSION replies)
 ```
 
 ## Keys
 
 - `tab` — cycle buffers (channels, queries, server windows)
 - `enter` — send
-- `ctrl+c` — quit
+
+Quit with `/quit` (or `/q`) — `ctrl+c` no longer closes the app.
 
 Slash commands: `/join #chan`, `/part [#chan]`, `/msg nick text`,
 `/ctcp nick command [args]`, `/quit` (or `/q`).
 
 CTCP is supported: `/me`-style actions render inline, incoming queries
 (`VERSION`, `PING`, `TIME`, `FINGER`, `USERINFO`, `CLIENTINFO`) are answered
-automatically via NOTICE, and CTCP replies land in the sender's buffer.
+automatically via NOTICE, and CTCP exchanges stay in the active buffer.
 `./ircgo -version` prints the release (currently v0.1).
 
 A nick list appears on the right for channel buffers (ops first, then
@@ -74,7 +80,6 @@ It hides on narrow terminals.
 ## Roadmap
 
 - Reconnect with backoff
-- Nick list pane and `/names` tracking
 - Scrollback-preserving scroll (pgup/pgdn without snap-to-bottom)
 - Mouse support, clickable buffer list
 - SASL EXTERNAL (client certs)
