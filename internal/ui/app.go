@@ -104,8 +104,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, waitForEvents(a.events)
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "ctrl+c":
-			return a, tea.Quit
 		case "tab":
 			if len(a.bufs) > 0 {
 				a.focus = (a.focus + 1) % len(a.bufs)
@@ -474,7 +472,7 @@ func (a *App) statusLine() string {
 		focused = b.Server + "/" + b.Name
 	}
 	return statusStyle.Width(a.width).
-		Render(fmt.Sprintf(" %s  •  tab: switch buffer  •  ctrl+c: quit ", focused))
+		Render(fmt.Sprintf(" %s  •  tab: switch buffer  •  /q: quit ", focused))
 }
 
 // sendInput routes the input line: slash commands or a PRIVMSG to the
@@ -536,7 +534,7 @@ func (a *App) sendCommand(cl *irc.Client, buf *store.Buffer, v string) tea.Cmd {
 			a.renderSidebar()
 			a.renderChat()
 		}
-	case "/quit":
+	case "/quit", "/q":
 		return tea.Quit
 	}
 	return nil
