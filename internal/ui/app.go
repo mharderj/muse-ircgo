@@ -81,6 +81,10 @@ var (
 	unreadStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("11"))
+	// dragStyle dims the sidebar row being dragged; dropStyle highlights
+	// the current drop target.
+	dragStyle  = lipgloss.NewStyle().Faint(true)
+	dropStyle  = lipgloss.NewStyle().Reverse(true)
 	topicStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8")).
 			Border(lipgloss.NormalBorder(), false, false, true, false).
@@ -141,9 +145,52 @@ type App struct {
 	archived map[string]bool
 	hidden   map[string]bool
 
+	// partedOnPark tracks buffers drag-parked with an auto-PART, keyed by
+	// memberKey; recovering one re-JOINs the channel.
+	partedOnPark map[string]bool
+
+	// order is the persisted sidebar order: buffer keys (memberKey) in
+	// display sequence. refreshBuffers sorts each (server, rank) group by
+	// position in this list; buffers absent from it go last. It is
+	// written to buffer_order in the config whenever the user reorders,
+	// parks or recovers a buffer, and restored on startup.
+	order    []string
+	orderIdx map[string]int
+
+	// Drag-to-reorder state. pressIdx/pressY/pressAfford capture a left
+	// press on a sidebar row; motion with the button held past a
+	// threshold activates the drag (dragIdx). dropKind/dropIdx describe
+	// the current drop target: "reorder" onto a buffer row, "archive"
+	// onto the archive zone (auto-parts channels), "recover" out of the
+	// archive back into a group.
+	pressIdx    int
+	pressY      int
+	pressAfford string
+	dragIdx     int
+	dragActive  bool
+	dragKey     string
+	dropKind    string
+	dropIdx     int
+	dropRow     int
+
+	// dropRows maps sidebar content rows to drop zones, rebuilt by
+	// renderSidebar while a drag is active: the archive divider (park a
+	// buffer) and the recover hint (unpark into an empty group).
+	dropRows map[int]dropTarget
+	// archivePad is the number of blank lines renderSidebar inserted
+	// above the bottom-pinned archive section; sidebarBufferAt walks the
+	// same layout, so both stay in sync.
+	archivePad int
+
 	width  int
 	height int
 	ready  bool
+}
+
+// dropTarget is a non-buffer drop zone in the sidebar.
+type dropTarget struct {
+	server string
+	kind   string // "archive" or "recover"
 }
 
 // lastFocus identifies a buffer to focus.
@@ -158,18 +205,287 @@ func New(cfg *config.Config, st *store.Store, events <-chan irc.Event, clients m
 	ti.Prompt = "> "
 	ti.CharLimit = 440
 	ti.Focus()
-	return &App{
+	a := &App{
 		cfg: cfg, st: st, events: events, clients: clients,
-		input:       ti,
-		members:     map[string]*memberSet{},
-		ownNicks:    map[string]string{},
-		imgCache:    map[string]string{},
-		imgInflight: map[string]bool{},
-		imgPending:  map[string][]artSlot{},
-		hovered:     -1,
-		archived:    map[string]bool{},
-		hidden:      map[string]bool{},
+		input:        ti,
+		members:      map[string]*memberSet{},
+		ownNicks:     map[string]string{},
+		imgCache:     map[string]string{},
+		imgInflight:  map[string]bool{},
+		imgPending:   map[string][]artSlot{},
+		hovered:      -1,
+		archived:     map[string]bool{},
+		hidden:       map[string]bool{},
+		partedOnPark: map[string]bool{},
+		orderIdx:     map[string]int{},
+		pressIdx:     -1,
+		dragIdx:      -1,
+		dropIdx:      -1,
+		dropRow:      -1,
+		dropRows:     map[int]dropTarget{},
 	}
+	a.loadBufferOrder()
+	return a
+}
+
+// resetDrag clears pending press/drag state without rendering.
+func (a *App) resetDrag() {
+	a.pressIdx = -1
+	a.pressY = 0
+	a.pressAfford = ""
+	a.dragIdx = -1
+	a.dragActive = false
+	a.dragKey = ""
+	a.dropKind = ""
+	a.dropIdx = -1
+	a.dropRow = -1
+}
+
+// dragBuffer returns the buffer being dragged, or nil.
+func (a *App) dragBuffer() *store.Buffer {
+	if !a.dragActive || a.dragIdx < 0 || a.dragIdx >= len(a.bufs) {
+		return nil
+	}
+	return a.bufs[a.dragIdx]
+}
+
+// contentRowAt maps a mouse position to a sidebar content row, accounting
+// for viewport scroll.
+func (a *App) contentRowAt(x, y int) (int, bool) {
+	sw := a.sidebarWidth()
+	if x < 0 || x > sw || y < 0 {
+		return 0, false
+	}
+	return y + a.sidebar.YOffset, true
+}
+
+// updateDrag advances an in-progress sidebar drag: it arms the drag once
+// the pointer leaves the press row, then resolves the drop target under
+// the cursor — a buffer row (reorder within a group, park onto the
+// archive, recover out of it) or a drop-zone divider row.
+func (a *App) updateDrag(x, y int) {
+	if a.pressIdx < 0 || a.pressIdx >= len(a.bufs) {
+		return
+	}
+	d := a.bufs[a.pressIdx]
+	if bufferRank(d) == 0 || a.pressAfford != "" {
+		return // the server window and affordance clicks aren't draggable
+	}
+	if !a.dragActive {
+		if i, ok := a.sidebarBufferAt(x, y); ok && i == a.pressIdx {
+			return // still on the press row: plain click so far
+		}
+		a.dragActive = true
+		a.dragIdx = a.pressIdx
+		a.dragKey = memberKey(d.Server, d.Name)
+	} else if a.dragKey != "" {
+		// The sidebar may have shifted under an active drag (new
+		// buffers, joins/parts); track the dragged buffer by key so
+		// the highlight and drop stay on the right row.
+		a.dragIdx = -1
+		for i, b := range a.bufs {
+			if memberKey(b.Server, b.Name) == a.dragKey {
+				a.dragIdx = i
+				break
+			}
+		}
+	}
+	a.dropKind, a.dropIdx, a.dropRow = a.resolveDrop(x, y)
+	a.renderSidebar()
+}
+
+// resolveDrop computes the drop target under (x, y) for the active drag:
+// "reorder" onto a buffer row in the same group, "archive" onto the
+// archive zone (auto-parts channels), "recover" out of the archive.
+// idx is the target buffer row (-1 for divider-zone drops, where row is
+// the content row instead).
+func (a *App) resolveDrop(x, y int) (kind string, idx, row int) {
+	d := a.dragBuffer()
+	if d == nil {
+		return "", -1, -1
+	}
+	dk := memberKey(d.Server, d.Name)
+	archivedDrag := a.archived[dk]
+	if i, ok := a.sidebarBufferAt(x, y); ok {
+		t := a.bufs[i]
+		if t.Server == d.Server && i != a.dragIdx {
+			dr, tr := a.displayRank(d), a.displayRank(t)
+			switch {
+			case dr == tr:
+				return "reorder", i, -1
+			case !archivedDrag && tr == 3:
+				return "archive", i, -1
+			case archivedDrag && tr != 3:
+				return "recover", i, -1
+			}
+		}
+		return "", -1, -1
+	}
+	if r, ok := a.contentRowAt(x, y); ok {
+		if dt, ok := a.dropRows[r]; ok && dt.server == d.Server {
+			switch {
+			case dt.kind == "archive" && !archivedDrag:
+				return "archive", -1, r
+			case dt.kind == "recover" && archivedDrag:
+				return "recover", -1, r
+			}
+		}
+	}
+	return "", -1, -1
+}
+
+// finishDrag applies the drop target under the release point. The dragged
+// buffer is re-resolved by key and the target recomputed: IRC events may
+// have shifted the sidebar mid-drag.
+func (a *App) finishDrag(x, y int) {
+	a.dragIdx = -1
+	for i, b := range a.bufs {
+		if memberKey(b.Server, b.Name) == a.dragKey {
+			a.dragIdx = i
+			break
+		}
+	}
+	d := a.dragBuffer()
+	if d == nil {
+		return
+	}
+	kind, idx, _ := a.resolveDrop(x, y)
+	dk := a.dragKey
+	switch kind {
+	case "reorder":
+		if idx == a.dragIdx {
+			return
+		}
+		t := a.bufs[idx]
+		tk := memberKey(t.Server, t.Name)
+		seq := a.displayKeySeq()
+		// The dragged buffer takes the target's slot in the display
+		// order, so dragging down onto the next row actually moves it
+		// down (insert-before would be a no-op there).
+		slot := 0
+		for i, k := range seq {
+			if k == tk {
+				slot = i
+				break
+			}
+		}
+		rest := make([]string, 0, len(seq))
+		for _, k := range seq {
+			if k != dk {
+				rest = append(rest, k)
+			}
+		}
+		if slot > len(rest) {
+			slot = len(rest)
+		}
+		res := append(append([]string{}, rest[:slot]...), dk)
+		res = append(res, rest[slot:]...)
+		a.setOrder(res)
+		a.refreshBuffers()
+		a.writeBufferOrder()
+	case "archive":
+		if isChannel(d.Name) {
+			if cl, ok := a.clients[d.Server]; ok {
+				_ = cl.Send("PART " + d.Name)
+			}
+			a.partedOnPark[dk] = true
+		}
+		a.closeBuffer(a.dragIdx) // parks the buffer
+	case "recover":
+		a.recoverBuffer(a.dragIdx) // unparks; re-JOINs if we parted it
+	}
+}
+
+// displayKeySeq returns the sidebar's current buffer keys in display order.
+func (a *App) displayKeySeq() []string {
+	seq := make([]string, 0, len(a.bufs))
+	for _, b := range a.bufs {
+		seq = append(seq, memberKey(b.Server, b.Name))
+	}
+	return seq
+}
+
+// carryOrder appends previously ordered keys that aren't in seq (hidden or
+// gone buffers), preserving their relative order so they keep their slots
+// if they return.
+func (a *App) carryOrder(seq []string) []string {
+	seen := make(map[string]bool, len(seq))
+	for _, k := range seq {
+		seen[k] = true
+	}
+	out := append([]string{}, seq...)
+	for _, k := range a.order {
+		if !seen[k] {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// trackOrder appends any visible buffer missing from the order list, in
+// display order. It reports whether the list changed.
+func (a *App) trackOrder() bool {
+	changed := false
+	for _, b := range a.bufs {
+		k := memberKey(b.Server, b.Name)
+		if _, ok := a.orderIdx[k]; !ok {
+			a.order = append(a.order, k)
+			a.orderIdx[k] = len(a.order) - 1
+			changed = true
+		}
+	}
+	return changed
+}
+
+// setOrder replaces the persisted order with seq (display order), carrying
+// absent keys, and re-indexes it.
+func (a *App) setOrder(seq []string) {
+	a.order = a.carryOrder(seq)
+	a.rebuildOrderIdx()
+}
+
+// writeBufferOrder writes the current order list to buffer_order in the
+// config file. It is a no-op when no config path is known (tests).
+func (a *App) writeBufferOrder() {
+	if a.ConfigPath == "" {
+		return
+	}
+	var pairs [][2]string
+	for _, k := range a.order {
+		if i := strings.IndexByte(k, 0); i >= 0 {
+			pairs = append(pairs, [2]string{k[:i], k[i+1:]})
+		}
+	}
+	_ = config.WriteBufferOrder(a.ConfigPath, pairs)
+}
+
+// loadBufferOrder restores the persisted sidebar order from the config.
+func (a *App) loadBufferOrder() {
+	for _, p := range a.cfg.BufferOrder {
+		if len(p) == 2 {
+			a.order = append(a.order, memberKey(p[0], p[1]))
+		}
+	}
+	a.rebuildOrderIdx()
+}
+
+// rebuildOrderIdx re-indexes the order list for the refreshBuffers sort.
+func (a *App) rebuildOrderIdx() {
+	a.orderIdx = make(map[string]int, len(a.order))
+	for i, k := range a.order {
+		if _, ok := a.orderIdx[k]; !ok {
+			a.orderIdx[k] = i
+		}
+	}
+}
+
+// orderSeq is a buffer's position in the persisted order; unknown buffers
+// sort after all known ones.
+func (a *App) orderSeq(b *store.Buffer) int {
+	if i, ok := a.orderIdx[memberKey(b.Server, b.Name)]; ok {
+		return i
+	}
+	return 1 << 30
 }
 
 func (a *App) Init() tea.Cmd {
@@ -207,39 +523,71 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.handleImageFetched(msg)
 		return a, nil
 	case tea.MouseMsg:
-		// Mouse motion tracks the hovered sidebar row for the close/recover
-		// affordances. All other mouse input is swallowed so clicks don't
-		// land in the input line.
+		// Mouse motion with the left button held is a sidebar drag; free
+		// motion tracks the hovered row for the close/recover affordances.
+		// All other mouse input is swallowed so clicks don't land in the
+		// input line.
 		if msg.Action == tea.MouseActionMotion {
+			if msg.Button == tea.MouseButtonLeft && a.pressIdx >= 0 {
+				a.updateDrag(msg.X, msg.Y)
+				return a, nil
+			}
+			if msg.Button == tea.MouseButtonNone {
+				if i, ok := a.sidebarBufferAt(msg.X, msg.Y); ok {
+					if a.hovered != i {
+						a.hovered = i
+						a.renderSidebar()
+					}
+				} else if a.hovered != -1 {
+					a.hovered = -1
+					a.renderSidebar()
+				}
+			}
+			return a, nil
+		}
+		// A press over a sidebar row pins the hover state there and arms a
+		// potential drag. Terminals that don't report free mouse motion
+		// still send press/release, so this keeps the close affordance
+		// reachable everywhere.
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			a.resetDrag()
 			if i, ok := a.sidebarBufferAt(msg.X, msg.Y); ok {
 				if a.hovered != i {
 					a.hovered = i
 					a.renderSidebar()
 				}
+				a.pressIdx = i
+				a.pressY = msg.Y
+				a.pressAfford = a.sidebarAffordance(i, msg.X)
 			} else if a.hovered != -1 {
 				a.hovered = -1
 				a.renderSidebar()
 			}
 			return a, nil
 		}
-		// A press over a sidebar row pins the hover state there. Terminals
-		// that don't report free mouse motion still send press/release,
-		// so this keeps the close affordance reachable everywhere.
-		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			if i, ok := a.sidebarBufferAt(msg.X, msg.Y); ok {
-				if a.hovered != i {
-					a.hovered = i
-					a.renderSidebar()
-				}
-			} else if a.hovered != -1 {
-				a.hovered = -1
-				a.renderSidebar()
-			}
-		}
-		// Left-click a sidebar buffer to switch to it (or its hover x to
-		// close/park it, its hover + to recover it), or a chat link to
-		// open it in the browser.
+		// Left-click release: finish a drag, fire a pressed affordance, or
+		// switch to the clicked buffer / open the clicked chat link.
 		if msg.Action == tea.MouseActionRelease && msg.Button == tea.MouseButtonLeft {
+			if a.dragActive {
+				a.finishDrag(msg.X, msg.Y)
+				a.resetDrag()
+				a.renderSidebar()
+				return a, nil
+			}
+			if a.pressAfford != "" {
+				if i, ok := a.sidebarBufferAt(msg.X, msg.Y); ok && a.sidebarAffordance(i, msg.X) == a.pressAfford {
+					switch a.pressAfford {
+					case "close":
+						a.closeBuffer(i)
+					case "recover":
+						a.recoverBuffer(i)
+					}
+					a.resetDrag()
+					return a, nil
+				}
+				// Pressed an affordance but released elsewhere: fall
+				// through to the normal click handling below.
+			}
 			if i, ok := a.sidebarBufferAt(msg.X, msg.Y); ok {
 				switch a.sidebarAffordance(i, msg.X) {
 				case "close":
@@ -254,9 +602,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if url, ok := a.linkAt(msg.X, msg.Y); ok {
 				openURL(url)
 			}
+			a.resetDrag()
 		}
 		return a, nil
 	case tea.KeyMsg:
+		// A keypress abandons any in-progress drag.
+		if a.dragActive {
+			a.resetDrag()
+			a.renderSidebar()
+		}
 		// alt+1..alt+9 jumps straight to the buffer in that sidebar
 		// position (top to bottom). Note: ctrl+digit would be the more
 		// familiar binding, but terminals don't transmit it in a form
@@ -488,8 +842,12 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 			a.memberRemove(server, ch, nick)
 			a.renderNicks()
 			if nick == a.ownNick(server) {
-				// We left: drop the buffer so the sidebar cleans up.
-				a.st.Remove(server, ch)
+				// We left: drop the buffer so the sidebar cleans up,
+				// unless it was parked in the archive (drag-to-archive
+				// auto-parts but keeps the parked buffer).
+				if !a.archived[memberKey(server, ch)] {
+					a.st.Remove(server, ch)
+				}
 			}
 		}
 	case "QUIT":
@@ -761,7 +1119,12 @@ func (a *App) sidebarBufferAt(x, y int) (i int, ok bool) {
 	r := 0
 	lastServer := ""
 	lastRank := -1
+	// Normal section: archived buffers are skipped here; they live in
+	// the bottom-pinned section walked below.
 	for idx, buf := range a.bufs {
+		if a.displayRank(buf) == 3 {
+			continue
+		}
 		if buf.Server != lastServer {
 			if lastServer != "" {
 				if r == row {
@@ -783,17 +1146,49 @@ func (a *App) sidebarBufferAt(x, y int) (i int, ok bool) {
 			}
 			r++
 		}
-		if rk == 3 && lastRank < 3 {
-			if r == row {
-				return 0, false // "-- Archive --" divider line
-			}
-			r++
-		}
 		lastRank = rk
 		if r == row {
 			return idx, true
 		}
 		r++
+	}
+	// Blank padding that pushes the archive section to the bottom.
+	for p := 0; p < a.archivePad; p++ {
+		if r == row {
+			return 0, false
+		}
+		r++
+	}
+	// Bottom-pinned archive section.
+	if a.showArchiveSection() {
+		d := a.dragBuffer()
+		if d != nil && a.archived[memberKey(d.Server, d.Name)] && !a.serverHasVisible(d.Server) {
+			if r == row {
+				return 0, false // "drop to recover" hint line
+			}
+			r++
+		}
+		if r == row {
+			return 0, false // "-- Archive --" divider line
+		}
+		r++
+		lastServer = ""
+		for idx, buf := range a.bufs {
+			if a.displayRank(buf) != 3 {
+				continue
+			}
+			if buf.Server != lastServer {
+				if r == row {
+					return 0, false // archive server label line
+				}
+				r++
+				lastServer = buf.Server
+			}
+			if r == row {
+				return idx, true
+			}
+			r++
+		}
 	}
 	return 0, false
 }
@@ -987,9 +1382,21 @@ func (a *App) refreshBuffers() {
 		if bufs[i].Server != bufs[j].Server {
 			return false
 		}
-		return a.displayRank(bufs[i]) < a.displayRank(bufs[j])
+		ri, rj := a.displayRank(bufs[i]), a.displayRank(bufs[j])
+		if ri != rj {
+			return ri < rj
+		}
+		return a.orderSeq(bufs[i]) < a.orderSeq(bufs[j])
 	})
 	a.bufs = bufs
+	// Track every visible buffer in the persisted order: new arrivals take
+	// the next free slot (sorting them at the end of their group), and the
+	// list is written back so a restart restores positions. Parking,
+	// recovering or removing a buffer never re-sequences the list, so a
+	// recovered buffer returns to its old slot.
+	if a.trackOrder() {
+		a.writeBufferOrder()
+	}
 	found := false
 	for i, b := range a.bufs {
 		if b.Server == fs && b.Name == fn {
@@ -1026,35 +1433,134 @@ func (a *App) refreshBuffers() {
 
 // sidebarDivider renders a labeled dim divider: "-- Messages --" between a
 // server's channels and its query buffers, "-- Archive --" above parked
-// buffers. The archive divider only appears when parked buffers exist.
+// buffers. The archive divider only appears when parked buffers exist (or
+// as a drag drop target while a drag is active).
 func (a *App) sidebarDivider(label string) string {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  -- " + label + " --")
 }
 
 func (a *App) renderSidebar() {
-	var b strings.Builder
+	a.dropRows = map[int]dropTarget{}
+	var lines []string
+	emit := func(s string) { lines = append(lines, s) }
+	d := a.dragBuffer()
+	dragServer, dragArchived := "", false
+	if d != nil {
+		dragServer = d.Server
+		dragArchived = a.archived[memberKey(d.Server, d.Name)]
+	}
+	// Normal section: server headers with their channels above the
+	// Messages divider and PMs below it. Archived buffers are skipped
+	// here; they render in the bottom-pinned section below.
 	lastServer := ""
 	lastRank := -1
 	for i, buf := range a.bufs {
+		if a.displayRank(buf) == 3 {
+			continue
+		}
 		if buf.Server != lastServer {
 			if lastServer != "" {
-				b.WriteString("\n")
+				emit("") // separator line
 			}
-			fmt.Fprintf(&b, "%s\n", lipgloss.NewStyle().Bold(true).Render(buf.Server))
+			emit(lipgloss.NewStyle().Bold(true).Render(buf.Server))
 			lastServer = buf.Server
 			lastRank = -1
 		}
 		r := a.displayRank(buf)
 		if r == 2 && lastRank < 2 {
-			b.WriteString(a.sidebarDivider("Messages") + "\n")
-		}
-		if r == 3 && lastRank < 3 {
-			b.WriteString(a.sidebarDivider("Archive") + "\n")
+			emit(a.sidebarDivider("Messages"))
 		}
 		lastRank = r
-		b.WriteString(a.sidebarRow(i, buf) + "\n")
+		emit(a.sidebarRow(i, buf))
 	}
-	a.sidebar.SetContent(b.String())
+	// Bottom-pinned archive section, built separately so blank padding can
+	// push it to the last rows of the viewport and conserve space above.
+	type archDrop struct {
+		row    int
+		target dropTarget
+	}
+	var arch []string
+	var archDrops []archDrop // arch-relative rows, offset once padding is known
+	archEmit := func(s string) { arch = append(arch, s) }
+	if a.showArchiveSection() {
+		// Recover hint: an archived drag whose home group has no visible
+		// rows to land on gets a landing spot above the archive.
+		if d != nil && dragArchived && !a.serverHasVisible(dragServer) {
+			archDrops = append(archDrops, archDrop{len(arch), dropTarget{server: dragServer, kind: "recover"}})
+			archEmit(a.dropDivider("drop to recover", a.dropKind == "recover"))
+		}
+		if d != nil && !dragArchived {
+			archDrops = append(archDrops, archDrop{len(arch), dropTarget{server: dragServer, kind: "archive"}})
+		}
+		archEmit(a.dropDivider("Archive", d != nil && !dragArchived && a.dropKind == "archive"))
+		lastServer = ""
+		for i, buf := range a.bufs {
+			if a.displayRank(buf) != 3 {
+				continue
+			}
+			if buf.Server != lastServer {
+				archEmit(lipgloss.NewStyle().Bold(true).Render(buf.Server))
+				lastServer = buf.Server
+			}
+			archEmit(a.sidebarRow(i, buf))
+		}
+	}
+	pad := a.sidebar.Height - len(lines) - len(arch)
+	if pad < 0 {
+		pad = 0
+	}
+	a.archivePad = pad
+	base := len(lines) + pad
+	for _, ad := range archDrops {
+		a.dropRows[base+ad.row] = ad.target
+	}
+	for p := 0; p < pad; p++ {
+		emit("")
+	}
+	lines = append(lines, arch...)
+	a.sidebar.SetContent(strings.Join(lines, "\n") + "\n")
+}
+
+// showArchiveSection reports whether the bottom-pinned archive section
+// renders: whenever something is parked, or mid-drag as a park target for
+// a normal buffer.
+func (a *App) showArchiveSection() bool {
+	if a.hasArchived() {
+		return true
+	}
+	d := a.dragBuffer()
+	return d != nil && !a.archived[memberKey(d.Server, d.Name)]
+}
+
+// hasArchived reports whether any buffer is currently parked.
+func (a *App) hasArchived() bool {
+	for _, b := range a.bufs {
+		if a.archived[memberKey(b.Server, b.Name)] {
+			return true
+		}
+	}
+	return false
+}
+
+// serverHasVisible reports whether server has any non-archived buffer row
+// in the sidebar's normal section.
+func (a *App) serverHasVisible(server string) bool {
+	for _, b := range a.bufs {
+		if b.Server == server && !a.archived[memberKey(b.Server, b.Name)] {
+			return true
+		}
+	}
+	return false
+}
+
+// dropDivider renders a drop-zone divider, highlighted when it is the
+// current drop target.
+func (a *App) dropDivider(label string, hot bool) string {
+	s := "  -- " + label + " --"
+	if hot {
+		return dropStyle.Render(s)
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(s)
 }
 
 // sidebarRow renders one buffer line. The hovered row (server windows
@@ -1066,12 +1572,16 @@ func (a *App) sidebarRow(i int, buf *store.Buffer) string {
 		marker = "> "
 	}
 	text := marker + buf.Name
-	if i == a.hovered && bufferRank(buf) != 0 {
+	if i == a.hovered && !a.dragActive && bufferRank(buf) != 0 {
 		text = a.hoverText(marker, buf)
 	} else if buf.Unread > 0 && i != a.focus {
 		text += " *"
 	}
 	switch {
+	case a.dragActive && i == a.dragIdx:
+		return dragStyle.Render(text)
+	case a.dragActive && i == a.dropIdx && a.dropKind != "":
+		return dropStyle.Render(text)
 	case i == a.focus:
 		return lipgloss.NewStyle().Reverse(true).Render(text)
 	case buf.Unread > 0:
@@ -1144,13 +1654,20 @@ func (a *App) closeBuffer(i int) {
 
 // recoverBuffer handles the hover + on an archived buffer: it returns to
 // its grouping (channels with channels, queries under Messages) and takes
-// focus.
+// focus. Buffers drag-parked with an auto-PART are re-JOINed.
 func (a *App) recoverBuffer(i int) {
 	if i < 0 || i >= len(a.bufs) {
 		return
 	}
 	b := a.bufs[i]
-	delete(a.archived, memberKey(b.Server, b.Name))
+	key := memberKey(b.Server, b.Name)
+	delete(a.archived, key)
+	if a.partedOnPark[key] {
+		delete(a.partedOnPark, key)
+		if cl, ok := a.clients[b.Server]; ok {
+			_ = cl.Send("JOIN " + b.Name)
+		}
+	}
 	a.refreshBuffers()
 	for j, ob := range a.bufs {
 		if ob.Server == b.Server && ob.Name == b.Name {

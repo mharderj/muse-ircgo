@@ -188,8 +188,8 @@ func TestClickXParksViaMouse(t *testing.T) {
 func TestClickRecoverViaMouse(t *testing.T) {
 	a := archiveTestApp(t)
 	a.closeBuffer(bufIndex(a, "amy"))
-	// Rows: 0 header, 1 srv, 2 #c, 3 Messages, 4 bob, 5 Archive divider, 6 amy.
-	row := 6
+	// The archive is bottom-pinned: find amy's row dynamically.
+	row := sidebarRowWith(t, a, "amy")
 	sw := a.sidebarWidth()
 	_, _ = a.Update(tea.MouseMsg{X: 5, Y: row, Action: tea.MouseActionMotion})
 	_, _ = a.Update(tea.MouseMsg{X: sw - 4, Y: row, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
@@ -201,13 +201,36 @@ func TestClickRecoverViaMouse(t *testing.T) {
 func TestSidebarBufferAtArchiveRows(t *testing.T) {
 	a := archiveTestApp(t)
 	a.closeBuffer(bufIndex(a, "amy"))
-	// 0 header, 1 srv, 2 #c, 3 Messages, 4 bob, 5 Archive divider, 6 amy.
-	if _, ok := a.sidebarBufferAt(5, 5); ok {
+	divRow := sidebarRowWith(t, a, "-- Archive --")
+	amyRow := sidebarRowWith(t, a, "amy")
+	if _, ok := a.sidebarBufferAt(5, divRow); ok {
 		t.Fatal("Archive divider row mapped to a buffer")
 	}
-	if i, ok := a.sidebarBufferAt(5, 6); !ok || a.bufs[i].Name != "amy" {
+	if i, ok := a.sidebarBufferAt(5, amyRow); !ok || a.bufs[i].Name != "amy" {
 		t.Fatalf("archive row -> (%d, %v), want amy", i, ok)
 	}
+	// The archive is pinned to the bottom: only blank padding may appear
+	// above it, and nothing but the section itself below the divider.
+	lines := strings.Split(sidebarText(a), "\n")
+	for _, l := range lines[amyRow+1:] {
+		if strings.TrimSpace(l) != "" {
+			t.Fatalf("non-blank line below bottom-pinned archive:\n%s", sidebarText(a))
+		}
+	}
+}
+
+// sidebarRowWith returns the index of the first sidebar text line
+// containing substr.
+func sidebarRowWith(t *testing.T, a *App, substr string) int {
+	t.Helper()
+	text := sidebarText(a)
+	for i, l := range strings.Split(text, "\n") {
+		if strings.Contains(l, substr) {
+			return i
+		}
+	}
+	t.Fatalf("no sidebar line contains %q:\n%s", substr, text)
+	return -1
 }
 
 func TestServerWindowNotCloseable(t *testing.T) {

@@ -24,6 +24,11 @@ type Config struct {
 	// [server, buffer]. The app writes it on exit; it is read on startup
 	// to restore focus.
 	LastBuffer []string `toml:"last_buffer"`
+
+	// BufferOrder is the custom sidebar order as [server, buffer] pairs,
+	// set by drag-and-drop reordering. The app rewrites it whenever the
+	// order changes; it is read on startup to restore positions.
+	BufferOrder [][]string `toml:"buffer_order"`
 }
 
 // DefaultHistoryLines is the playback depth when history_playback is unset.
@@ -196,9 +201,9 @@ func tomlString(s string) string {
 	return b.String()
 }
 
-// isLastBufferKey reports whether a trimmed config line sets last_buffer.
-func isLastBufferKey(line string) bool {
-	rest, ok := strings.CutPrefix(line, "last_buffer")
+// isTopLevelKey reports whether a trimmed config line sets key ("key = ...").
+func isTopLevelKey(line, key string) bool {
+	rest, ok := strings.CutPrefix(line, key)
 	if !ok {
 		return false
 	}
@@ -206,12 +211,12 @@ func isLastBufferKey(line string) bool {
 	return strings.HasPrefix(rest, "=")
 }
 
-// WriteLastBuffer records the focused buffer in the config file, preserving
-// comments and formatting: the existing last_buffer line is replaced in
-// place, or a new one is inserted before the first table header (top-level
-// keys must precede tables in TOML). A misplaced last_buffer inside a table
-// is dropped and re-written at the top level.
-func WriteLastBuffer(path, server, name string) error {
+// rewriteTopLevelArray replaces (or inserts) a top-level `key = [...]`
+// line, preserving comments and formatting: the existing line is replaced
+// in place, or a new one is inserted before the first table header
+// (top-level keys must precede tables in TOML). A misplaced key inside a
+// table is dropped and re-written at the top level.
+func rewriteTopLevelArray(path, key, newLine string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -220,7 +225,6 @@ func WriteLastBuffer(path, server, name string) error {
 	if fi, err := os.Stat(path); err == nil {
 		mode = fi.Mode().Perm()
 	}
-	newLine := "last_buffer = [" + tomlString(server) + ", " + tomlString(name) + "]"
 	var out []string
 	inTable, written := false, false
 	for _, l := range strings.SplitAfter(string(data), "\n") {
@@ -234,7 +238,7 @@ func WriteLastBuffer(path, server, name string) error {
 			out = append(out, l)
 			continue
 		}
-		if isLastBufferKey(t) {
+		if isTopLevelKey(t, key) {
 			if !inTable && !written {
 				out = append(out, newLine+"\n")
 				written = true
@@ -250,4 +254,30 @@ func WriteLastBuffer(path, server, name string) error {
 		out = append(out, newLine+"\n")
 	}
 	return os.WriteFile(path, []byte(strings.Join(out, "")), mode)
+}
+
+// WriteLastBuffer records the focused buffer in the config file, preserving
+// comments and formatting: the existing last_buffer line is replaced in
+// place, or a new one is inserted before the first table header (top-level
+// keys must precede tables in TOML). A misplaced last_buffer inside a table
+// is dropped and re-written at the top level.
+func WriteLastBuffer(path, server, name string) error {
+	newLine := "last_buffer = [" + tomlString(server) + ", " + tomlString(name) + "]"
+	return rewriteTopLevelArray(path, "last_buffer", newLine)
+}
+
+// WriteBufferOrder records the sidebar buffer order in the config file as
+// buffer_order = [[server, name], ...], preserving comments and formatting
+// the same way WriteLastBuffer does.
+func WriteBufferOrder(path string, order [][2]string) error {
+	var b strings.Builder
+	b.WriteString("buffer_order = [")
+	for i, p := range order {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString("[" + tomlString(p[0]) + ", " + tomlString(p[1]) + "]")
+	}
+	b.WriteString("]")
+	return rewriteTopLevelArray(path, "buffer_order", b.String())
 }

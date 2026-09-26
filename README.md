@@ -35,9 +35,16 @@ Split-view TUI, TLS connections, and first-class ZNC/bouncer support.
 - Sidebar buffer management: hovering a buffer reveals a dim `x` that parks
   it under `-- Archive --` (channels stay joined, nothing is parted);
   archived rows also offer `+` to recover them to their grouping, while
-  their `x` removes them from view entirely. The archive section only
-  appears when something is parked, and new activity returns a parked or
-  removed buffer to the sidebar on its own
+  their `x` removes them from view entirely. The archive section is pinned
+  to the bottom of the sidebar and only appears when something is parked,
+  and new activity returns a parked or removed buffer to the sidebar on
+  its own
+- Drag-to-reorder: drag a sidebar buffer within its group — channels stay
+  with channels, DMs stay under `-- Messages --`. Dragging a channel onto
+  the `-- Archive --` divider parks it and auto-sends `PART` (recovering
+  it re-sends `JOIN`); dragging a DM there just parks it. Your custom order
+  is remembered in the config (`buffer_order`) and restored on the next
+  launch
 - TLS, with `insecure_skip_verify` for self-signed certs
 - Auto-reconnect with backoff when the connection drops
 - Nick collision fallback: a `433` at connect retries as `nick_`
@@ -99,7 +106,9 @@ internal/version     release version (`-version`, CTCP VERSION replies)
 - `tab` — cycle buffers (channels, queries, server windows)
 - `alt+1` … `alt+9` — jump to a buffer by its sidebar position, top to bottom
 - `enter` — send
-- mouse: left-click a buffer in the sidebar to switch to it
+- mouse: left-click a buffer in the sidebar to switch to it; drag a buffer
+  to reorder it within its group, or drag it onto `-- Archive --` to park
+  it (channels auto-PART; drag back or click `+` to recover and re-JOIN)
 
 Quit with `/quit` (or `/q`) — `ctrl+c` no longer closes the app.
 
@@ -110,7 +119,7 @@ Slash commands: `/join #chan`, `/part [#chan]`, `/msg nick text`, `/me text`,
 CTCP is supported: `/me`-style actions render inline, incoming queries
 (`VERSION`, `PING`, `TIME`, `FINGER`, `USERINFO`, `CLIENTINFO`) are answered
 automatically via NOTICE, and CTCP exchanges stay in the active buffer.
-`./ircgo -version` prints the release (currently v0.1.21).
+`./ircgo -version` prints the release (currently v0.2.0).
 
 A nick list appears on the right for channel buffers (ops first, then
 alphabetical), built from NAMES replies and JOIN/PART/QUIT/NICK updates.
