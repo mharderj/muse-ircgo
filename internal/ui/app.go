@@ -45,6 +45,9 @@ var (
 	statusStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("7")).
 			Background(lipgloss.Color("4"))
+	nicksStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder(), false, false, false, true).
+			BorderForeground(lipgloss.Color("8"))
 )
 
 // App is the root Bubble Tea model.
@@ -57,8 +60,11 @@ type App struct {
 	bufs  []*store.Buffer
 	focus int
 
+	members map[string]*memberSet
+
 	sidebar viewport.Model
 	chat    viewport.Model
+	nicks   viewport.Model
 	input   textinput.Model
 
 	width  int
@@ -75,7 +81,8 @@ func New(cfg *config.Config, st *store.Store, events <-chan irc.Event, clients m
 	ti.Focus()
 	return &App{
 		cfg: cfg, st: st, events: events, clients: clients,
-		input: ti,
+		input:   ti,
+		members: map[string]*memberSet{},
 	}
 }
 
@@ -102,8 +109,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "tab":
 			if len(a.bufs) > 0 {
 				a.focus = (a.focus + 1) % len(a.bufs)
-				a.renderSidebar()
-				a.renderChat()
+				// resize re-lays out the columns (the nick pane only
+				// appears for channels) and re-renders.
+				a.resize()
 			}
 			return a, nil
 		case "enter":
@@ -136,6 +144,7 @@ func (a *App) handleEvent(ev irc.Event) {
 	a.renderSidebar()
 	if a.ready {
 		a.renderChat()
+		a.renderNicks()
 	}
 }
 
@@ -225,17 +234,34 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 		}
 		ch := m.Params[0]
 		a.addLine(server, ch, store.Line{At: at, Nick: nick, Text: "joined " + ch, Kind: store.KindJoin})
+		if isChannel(ch) {
+			a.memberAdd(server, ch, nick, "")
+			a.renderNicks()
+			// Ask for the full roster: ZNC replays JOINs on attach but
+			// doesn't always send NAMES, so the pane would stay sparse.
+			if cl, ok := a.clients[server]; ok && nick == a.ownNick(server) {
+				_ = cl.Send("NAMES " + ch)
+			}
+		}
 	case "PART":
 		ch := ""
 		if len(m.Params) > 0 {
 			ch = m.Params[0]
 		}
 		a.addLine(server, ch, store.Line{At: at, Nick: nick, Text: "left " + ch, Kind: store.KindPart})
+		if isChannel(ch) {
+			a.memberRemove(server, ch, nick)
+			a.renderNicks()
+		}
 	case "QUIT":
-		// No membership tracking yet; log to the server window.
 		a.addLine(server, server, store.Line{At: at, Nick: nick, Text: "quit: " + m.Trailing(), Kind: store.KindQuit})
+		a.memberQuit(server, nick)
+		a.renderNicks()
 	case "NICK":
-		a.addLine(server, server, store.Line{At: at, Nick: nick, Text: "is now known as " + m.Trailing(), Kind: store.KindSystem})
+		newNick := m.Trailing()
+		a.addLine(server, server, store.Line{At: at, Nick: nick, Text: "is now known as " + newNick, Kind: store.KindSystem})
+		a.memberRename(server, nick, newNick)
+		a.renderNicks()
 	default:
 		if isNumeric(m.Command) {
 			// Keep the welcome/MOTD numerics, skip the noise.
@@ -246,6 +272,12 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 					text = strings.Join(m.Params[1:], " ")
 				}
 				a.addLine(server, server, store.Line{At: at, Text: text, Kind: store.KindSystem})
+			case "353":
+				// RPL_NAMREPLY: track membership, keep it out of scrollback.
+				a.handleNames(server, m.Trailing(), m.Params)
+			case "366":
+				// RPL_ENDOFNAMES: roster complete; refresh the pane.
+				a.renderNicks()
 			case "403", "442", "471", "473", "474", "475", "476":
 				// Join failures used to vanish silently: the server
 				// never echoes our JOIN, so no channel buffer appears
@@ -266,6 +298,40 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 
 func isChannel(s string) bool {
 	return strings.HasPrefix(s, "#") || strings.HasPrefix(s, "&")
+}
+
+// nickPaneWidth reserves a right-hand nick list when the focused buffer is
+// a channel and the terminal is wide enough to spare the space.
+func (a *App) nickPaneWidth() int {
+	if a.width < 90 || len(a.bufs) == 0 || a.focus >= len(a.bufs) {
+		return 0
+	}
+	if !isChannel(a.bufs[a.focus].Name) {
+		return 0
+	}
+	return 21 // 20 for nicks + 1 for the border
+}
+
+// renderNicks fills the right-hand pane with the focused channel's roster,
+// ops first, then alphabetical.
+func (a *App) renderNicks() {
+	if len(a.bufs) == 0 || a.focus >= len(a.bufs) {
+		a.nicks.SetContent("")
+		return
+	}
+	buf := a.bufs[a.focus]
+	if !isChannel(buf.Name) {
+		a.nicks.SetContent("")
+		return
+	}
+	names := a.members[memberKey(buf.Server, buf.Name)].sorted()
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s (%d)\n", buf.Name, len(names))
+	for _, n := range names {
+		b.WriteString(n.prefix + n.nick + "\n")
+	}
+	a.nicks.SetContent(b.String())
+	a.nicks.GotoTop()
 }
 
 // ctcpReply answers the common CTCP queries. Unknown commands return "",
@@ -355,7 +421,8 @@ func (a *App) resize() {
 	if sw < 16 {
 		sw = 16
 	}
-	chatW := a.width - sw - 1 // 1 for the sidebar border
+	nw := a.nickPaneWidth()
+	chatW := a.width - sw - 1 - nw // 1 for the sidebar border
 	if chatW < 20 {
 		chatW = 20
 	}
@@ -365,9 +432,11 @@ func (a *App) resize() {
 	}
 	a.sidebar = viewport.New(sw, chatH)
 	a.chat = viewport.New(chatW, chatH)
+	a.nicks = viewport.New(max(nw-1, 1), chatH)
 	a.input.Width = chatW - 2
 	a.renderSidebar()
 	a.renderChat()
+	a.renderNicks()
 }
 
 func (a *App) View() string {
@@ -378,6 +447,12 @@ func (a *App) View() string {
 		sidebarStyle.Render(a.sidebar.View()),
 		a.chat.View(),
 	)
+	if a.nickPaneWidth() > 0 {
+		main = lipgloss.JoinHorizontal(lipgloss.Top,
+			main,
+			nicksStyle.Render(a.nicks.View()),
+		)
+	}
 	body := lipgloss.JoinVertical(lipgloss.Left, main, a.input.View())
 	return lipgloss.JoinVertical(lipgloss.Left, body, a.statusLine())
 }

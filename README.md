@@ -57,6 +57,10 @@ CTCP is supported: `/me`-style actions render inline, incoming queries
 automatically via NOTICE, and CTCP replies land in the sender's buffer.
 `./ircgo -version` prints the release (currently v0.1).
 
+A nick list appears on the right for channel buffers (ops first, then
+alphabetical), built from NAMES replies and JOIN/PART/QUIT/NICK updates.
+It hides on narrow terminals.
+
 ## ZNC notes
 
 - Auth uses `PASS user/network:password`, assembled from the `username`,
