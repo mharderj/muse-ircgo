@@ -215,7 +215,7 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 				}
 			}
 		}
-		a.addLine(server, buf, store.Line{At: at, Nick: nick, Text: irc.StripFormatting(text), Kind: kind})
+		a.addLine(server, buf, store.Line{At: at, Nick: nick, Text: text, Kind: kind})
 	case "NOTICE":
 		text := m.Trailing()
 		kind := store.KindNotice
@@ -236,7 +236,7 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 				target = a.bufs[a.focus].Name
 			}
 		}
-		a.addLine(server, target, store.Line{At: at, Nick: nick, Text: irc.StripFormatting(text), Kind: kind})
+		a.addLine(server, target, store.Line{At: at, Nick: nick, Text: text, Kind: kind})
 	case "JOIN":
 		if len(m.Params) < 1 {
 			return
@@ -461,10 +461,10 @@ func (a *App) renderChat() {
 			fmt.Fprintf(&b, "%s %s %s\n",
 				tsStyle.Render(ts),
 				nickStyle.Render(fmt.Sprintf("%-14s", l.Nick)),
-				l.Text)
+				irc.FormatText(l.Text))
 		case store.KindAction:
 			fmt.Fprintf(&b, "%s %s\n", tsStyle.Render(ts),
-				sysStyle.Render("* "+l.Nick+" "+l.Text))
+				sysStyle.Render("* "+l.Nick+" ")+irc.FormatStyled(l.Text, sysStyle))
 		default:
 			fmt.Fprintf(&b, "%s %s\n", tsStyle.Render(ts), sysStyle.Render(l.Text))
 		}
