@@ -4,6 +4,15 @@ Vibed to hell app, testing out MuseAI as a novice
 A terminal IRC client in Go, built on [Bubble Tea](https://github.com/charmbracelet/bubbletea).
 Split-view TUI, TLS connections, and first-class ZNC/bouncer support.
 
+## Features
+
+- Split-view TUI: buffer sidebar, chat pane, input, status bar
+- Mouse: left-click a buffer in the sidebar to switch to it
+- Channel nick list (ops first, then voiced, then alphabetical)
+- CTCP queries answered automatically (`VERSION`, `PING`, `TIME`, …)
+- ZNC/bouncer support with `server-time` backlog timestamps
+- TLS, with `insecure_skip_verify` for self-signed certs
+
 ## Build
 
 ```sh
@@ -63,7 +72,7 @@ Slash commands: `/join #chan`, `/part [#chan]`, `/msg nick text`,
 CTCP is supported: `/me`-style actions render inline, incoming queries
 (`VERSION`, `PING`, `TIME`, `FINGER`, `USERINFO`, `CLIENTINFO`) are answered
 automatically via NOTICE, and CTCP exchanges stay in the active buffer.
-`./ircgo -version` prints the release (currently v0.1).
+`./ircgo -version` prints the release (currently v0.1.1).
 
 A nick list appears on the right for channel buffers (ops first, then
 alphabetical), built from NAMES replies and JOIN/PART/QUIT/NICK updates.
@@ -82,7 +91,6 @@ It hides on narrow terminals.
 
 - Reconnect with backoff
 - Scrollback-preserving scroll (pgup/pgdn without snap-to-bottom)
-- Mouse support, clickable buffer list
 - Scroll wheel: scroll chat history
 - SASL EXTERNAL (client certs)
 - Configurable keybinds and themes
