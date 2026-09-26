@@ -67,7 +67,7 @@ func main() {
 	app.ConfigPath = *cfgPath
 	p := tea.NewProgram(app,
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(), // click sidebar buffers to switch
+		tea.WithMouseAllMotion(), // hover x on sidebar buffers + click to switch
 	)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "ircgo: %v\n", err)
