@@ -28,6 +28,8 @@ Split-view TUI, TLS connections, and first-class ZNC/bouncer support.
   update the nick list live)
 - Buffers match case-insensitively: a reply from `Belial` lands in your
   existing `belial` query instead of opening a second buffer
+- Unread markers: buffers with unseen activity show a bold yellow `*` in
+  the sidebar, cleared when you switch to them
 
 ## Build
 
@@ -91,7 +93,7 @@ Slash commands: `/join #chan`, `/part [#chan]`, `/msg nick text`, `/me text`,
 CTCP is supported: `/me`-style actions render inline, incoming queries
 (`VERSION`, `PING`, `TIME`, `FINGER`, `USERINFO`, `CLIENTINFO`) are answered
 automatically via NOTICE, and CTCP exchanges stay in the active buffer.
-`./ircgo -version` prints the release (currently v0.1.9).
+`./ircgo -version` prints the release (currently v0.1.10).
 
 A nick list appears on the right for channel buffers (ops first, then
 alphabetical), built from NAMES replies and JOIN/PART/QUIT/NICK updates.

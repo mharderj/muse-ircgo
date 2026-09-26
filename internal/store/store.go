@@ -37,6 +37,8 @@ type Buffer struct {
 	Server string
 	Name   string
 	Topic  string // channel topic, from RPL_TOPIC (332) / TOPIC
+	// Unread counts incoming messages since the buffer was last focused.
+	Unread int
 	lines  []Line
 }
 

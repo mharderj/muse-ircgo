@@ -67,6 +67,10 @@ var (
 	linkStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("12")).
 			Underline(true)
+	// unreadStyle marks sidebar buffers with unseen activity.
+	unreadStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("11"))
 	topicStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8")).
 			Border(lipgloss.NormalBorder(), false, false, true, false).
@@ -151,10 +155,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// clicks don't land in the input line.
 		if msg.Action == tea.MouseActionRelease && msg.Button == tea.MouseButtonLeft {
 			if i, ok := a.sidebarBufferAt(msg.X, msg.Y); ok && i != a.focus {
-				a.focus = i
-				// Mirror tab: re-lay out, since the nick pane
-				// only appears for channel buffers.
-				a.resize()
+				a.focusBuffer(i)
 			} else if url, ok := a.linkAt(msg.X, msg.Y); ok {
 				openURL(url)
 			}
@@ -168,10 +169,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if s := msg.String(); len(s) == 5 && strings.HasPrefix(s, "alt+") {
 			if d := s[4]; d >= '1' && d <= '9' {
 				if i := int(d - '1'); i < len(a.bufs) && i != a.focus {
-					a.focus = i
-					// Mirror tab: re-lay out, since the nick pane
-					// only appears for channel buffers.
-					a.resize()
+					a.focusBuffer(i)
 				}
 				return a, nil
 			}
@@ -179,10 +177,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "tab":
 			if len(a.bufs) > 0 {
-				a.focus = (a.focus + 1) % len(a.bufs)
-				// resize re-lays out the columns (the nick pane only
-				// appears for channels) and re-renders.
-				a.resize()
+				a.focusBuffer((a.focus + 1) % len(a.bufs))
 			}
 			return a, nil
 		case "enter":
@@ -302,6 +297,7 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 			}
 		}
 		a.addLine(server, buf, store.Line{At: at, Nick: nick, Text: text, Kind: kind})
+		a.bumpUnread(server, buf, nick)
 		if kind == store.KindChat {
 			return a.queueImageFetches(server, buf, text)
 		}
@@ -327,6 +323,7 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 			}
 		}
 		a.addLine(server, target, store.Line{At: at, Nick: nick, Text: text, Kind: kind})
+		a.bumpUnread(server, target, nick)
 	case "TOPIC":
 		if len(m.Params) < 1 {
 			return nil
@@ -778,6 +775,8 @@ func (a *App) renderSidebar() {
 		line := "  " + buf.Name
 		if i == a.focus {
 			line = lipgloss.NewStyle().Reverse(true).Render("> " + buf.Name)
+		} else if buf.Unread > 0 {
+			line = unreadStyle.Render("  " + buf.Name + " *")
 		}
 		b.WriteString(line + "\n")
 	}
@@ -975,6 +974,35 @@ func (a *App) setOwnNick(server, nick string) {
 		a.ownNicks = map[string]string{}
 	}
 	a.ownNicks[server] = nick
+}
+
+// focusBuffer switches to buffer i, clearing its unread marker. All
+// buffer-switching paths (tab, alt+digit, mouse click) go through here.
+func (a *App) focusBuffer(i int) {
+	if i < 0 || i >= len(a.bufs) {
+		return
+	}
+	a.focus = i
+	a.bufs[i].Unread = 0
+	// Re-lay out, since the nick pane only appears for channel buffers.
+	a.resize()
+}
+
+// bumpUnread flags unseen activity on a buffer. Our own messages and the
+// focused buffer never bump.
+func (a *App) bumpUnread(server, buf, nick string) {
+	if nick == "" || nick == a.ownNick(server) {
+		return
+	}
+	// Resolve the case-insensitive spelling first: Get would otherwise
+	// create a "Belial" buffer next to the "belial" one addLine just used.
+	buf = a.st.Resolve(server, buf)
+	if len(a.bufs) > 0 && a.focus < len(a.bufs) {
+		if b := a.bufs[a.focus]; b.Server == server && b.Name == buf {
+			return
+		}
+	}
+	a.st.Get(server, buf).Unread++
 }
 
 func (a *App) sendCommand(cl *irc.Client, buf *store.Buffer, v string) tea.Cmd {
