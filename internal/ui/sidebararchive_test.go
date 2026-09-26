@@ -256,3 +256,25 @@ func TestHoverReRendersSidebarWithCloseX(t *testing.T) {
 		t.Fatalf("close affordance still visible after moving off:\n%s", a.sidebar.View())
 	}
 }
+
+// Pressing a sidebar row pins hover there even when the terminal never
+// sends free mouse-motion events, so the close affordance stays reachable.
+func TestPressPinsHoverForCloseX(t *testing.T) {
+	a := archiveTestApp(t)
+	// Rows: 0=server header, 1=server window, 2=channel,
+	// 3="-- Messages --" divider, 4=amy (PM). Press amy's row.
+	u, _ := a.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 2, Y: 4})
+	a = u.(*App)
+	if a.hovered != 2 {
+		t.Fatalf("hovered = %d, want 2 after press", a.hovered)
+	}
+	if !strings.Contains(a.sidebar.View(), "x") {
+		t.Fatalf("close affordance not rendered after press:\n%s", a.sidebar.View())
+	}
+	// Pressing outside the sidebar clears hover.
+	u, _ = a.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 100, Y: 4})
+	a = u.(*App)
+	if a.hovered != -1 {
+		t.Fatalf("hovered = %d, want -1 after pressing outside", a.hovered)
+	}
+}

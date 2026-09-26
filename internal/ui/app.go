@@ -222,6 +222,20 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return a, nil
 		}
+		// A press over a sidebar row pins the hover state there. Terminals
+		// that don't report free mouse motion still send press/release,
+		// so this keeps the close affordance reachable everywhere.
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			if i, ok := a.sidebarBufferAt(msg.X, msg.Y); ok {
+				if a.hovered != i {
+					a.hovered = i
+					a.renderSidebar()
+				}
+			} else if a.hovered != -1 {
+				a.hovered = -1
+				a.renderSidebar()
+			}
+		}
 		// Left-click a sidebar buffer to switch to it (or its hover x to
 		// close/park it, its hover + to recover it), or a chat link to
 		// open it in the browser.
