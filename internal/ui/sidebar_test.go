@@ -51,8 +51,8 @@ func TestSidebarRendersDividerBetweenChannelsAndQueries(t *testing.T) {
 	a.sidebar.Height = 20
 	a.renderSidebar()
 	view := a.sidebar.View()
-	if !strings.Contains(view, "─") {
-		t.Fatalf("sidebar has no divider:\n%s", view)
+	if !strings.Contains(view, "-- Messages --") {
+		t.Fatalf("sidebar has no Messages divider:\n%s", view)
 	}
 	// The divider sits between the channel row and the query row.
 	lines := strings.Split(view, "\n")
@@ -61,7 +61,7 @@ func TestSidebarRendersDividerBetweenChannelsAndQueries(t *testing.T) {
 		switch {
 		case strings.Contains(l, "#a"):
 			chanRow = i
-		case strings.Contains(l, "─"):
+		case strings.Contains(l, "-- Messages --"):
 			divRow = i
 		case strings.Contains(l, "belial"):
 			queryRow = i

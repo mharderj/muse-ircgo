@@ -130,6 +130,17 @@ type App struct {
 	// manual buffer switch clears it.
 	pendingFocus lastFocus
 
+	// hovered is the sidebar row under the mouse (-1 when the mouse isn't
+	// over a buffer), used for the hover close/recover affordances.
+	hovered int
+
+	// archived parks closed buffers under the "-- Archive --" divider;
+	// hidden removes archived buffers from view entirely. Both are keyed
+	// by memberKey(server, name) and are session-only. New activity in a
+	// parked or hidden buffer returns it to the sidebar.
+	archived map[string]bool
+	hidden   map[string]bool
+
 	width  int
 	height int
 	ready  bool
@@ -155,6 +166,9 @@ func New(cfg *config.Config, st *store.Store, events <-chan irc.Event, clients m
 		imgCache:    map[string]string{},
 		imgInflight: map[string]bool{},
 		imgPending:  map[string][]artSlot{},
+		hovered:     -1,
+		archived:    map[string]bool{},
+		hidden:      map[string]bool{},
 	}
 }
 
@@ -193,12 +207,32 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.handleImageFetched(msg)
 		return a, nil
 	case tea.MouseMsg:
-		// Left-click a sidebar buffer to switch to it, or a chat link to
-		// open it in the browser. All other mouse input is swallowed so
-		// clicks don't land in the input line.
+		// Mouse motion tracks the hovered sidebar row for the close/recover
+		// affordances. All other mouse input is swallowed so clicks don't
+		// land in the input line.
+		if msg.Action == tea.MouseActionMotion {
+			if i, ok := a.sidebarBufferAt(msg.X, msg.Y); ok {
+				a.hovered = i
+			} else {
+				a.hovered = -1
+			}
+			return a, nil
+		}
+		// Left-click a sidebar buffer to switch to it (or its hover x to
+		// close/park it, its hover + to recover it), or a chat link to
+		// open it in the browser.
 		if msg.Action == tea.MouseActionRelease && msg.Button == tea.MouseButtonLeft {
-			if i, ok := a.sidebarBufferAt(msg.X, msg.Y); ok && i != a.focus {
-				a.focusBuffer(i)
+			if i, ok := a.sidebarBufferAt(msg.X, msg.Y); ok {
+				switch a.sidebarAffordance(i, msg.X) {
+				case "close":
+					a.closeBuffer(i)
+				case "recover":
+					a.recoverBuffer(i)
+				default:
+					if i != a.focus {
+						a.focusBuffer(i)
+					}
+				}
 			} else if url, ok := a.linkAt(msg.X, msg.Y); ok {
 				openURL(url)
 			}
@@ -274,6 +308,14 @@ func (a *App) addLine(server, target string, l store.Line) tea.Cmd {
 	// IRC names are case-insensitive: file "Belial" under the existing
 	// "belial" buffer instead of opening a second one.
 	target = a.st.Resolve(server, target)
+	// New activity returns a parked or hidden buffer to the sidebar.
+	key := memberKey(server, target)
+	if a.archived[key] || a.hidden[key] {
+		delete(a.archived, key)
+		delete(a.hidden, key)
+		a.refreshBuffers()
+		a.renderSidebar()
+	}
 	isNew := !a.st.Has(server, target)
 	buf := a.st.Get(server, target)
 	var cmd tea.Cmd
@@ -684,11 +726,16 @@ func isNumeric(s string) bool {
 // line up 1:1 with buffers; this replays that layout to find the buffer on
 // the clicked row. ok is false for headers, separators, blank space, and
 // clicks outside the sidebar.
-func (a *App) sidebarBufferAt(x, y int) (i int, ok bool) {
-	sw := a.cfg.UI.SidebarWidth
-	if sw < 16 {
-		sw = 16
+// sidebarWidth is the on-screen width of the sidebar column.
+func (a *App) sidebarWidth() int {
+	if sw := a.cfg.UI.SidebarWidth; sw >= 16 {
+		return sw
 	}
+	return 16
+}
+
+func (a *App) sidebarBufferAt(x, y int) (i int, ok bool) {
+	sw := a.sidebarWidth()
 	if x < 0 || x > sw || y < 0 {
 		return 0, false // x == sw is the sidebar's right border
 	}
@@ -711,13 +758,20 @@ func (a *App) sidebarBufferAt(x, y int) (i int, ok bool) {
 			lastServer = buf.Server
 			lastRank = -1
 		}
-		if rk := bufferRank(buf); rk == 2 && lastRank < 2 {
+		rk := a.displayRank(buf)
+		if rk == 2 && lastRank < 2 {
 			if r == row {
-				return 0, false // channel/query divider line
+				return 0, false // "-- Messages --" divider line
 			}
 			r++
 		}
-		lastRank = bufferRank(buf)
+		if rk == 3 && lastRank < 3 {
+			if r == row {
+				return 0, false // "-- Archive --" divider line
+			}
+			r++
+		}
+		lastRank = rk
 		if r == row {
 			return idx, true
 		}
@@ -881,6 +935,16 @@ func bufferRank(b *store.Buffer) int {
 	}
 }
 
+// displayRank orders buffers within a server group: the server window,
+// then channels, then queries under "-- Messages --", then parked buffers
+// under "-- Archive --".
+func (a *App) displayRank(b *store.Buffer) int {
+	if a.archived[memberKey(b.Server, b.Name)] {
+		return 3
+	}
+	return bufferRank(b)
+}
+
 // refreshBuffers rebuilds the sidebar buffer list, ordering each server's
 // buffers as server window, channels, then queries. Focus follows the
 // buffer by identity, so a newly created buffer slotting into its sorted
@@ -890,16 +954,41 @@ func (a *App) refreshBuffers() {
 	if a.focus < len(a.bufs) {
 		fs, fn = a.bufs[a.focus].Server, a.bufs[a.focus].Name
 	}
-	a.bufs = a.st.Buffers()
-	sort.SliceStable(a.bufs, func(i, j int) bool {
-		if a.bufs[i].Server != a.bufs[j].Server {
+	var hs, hn string
+	if a.hovered >= 0 && a.hovered < len(a.bufs) {
+		hs, hn = a.bufs[a.hovered].Server, a.bufs[a.hovered].Name
+	}
+	var bufs []*store.Buffer
+	for _, b := range a.st.Buffers() {
+		if a.hidden[memberKey(b.Server, b.Name)] {
+			continue
+		}
+		bufs = append(bufs, b)
+	}
+	sort.SliceStable(bufs, func(i, j int) bool {
+		if bufs[i].Server != bufs[j].Server {
 			return false
 		}
-		return bufferRank(a.bufs[i]) < bufferRank(a.bufs[j])
+		return a.displayRank(bufs[i]) < a.displayRank(bufs[j])
 	})
+	a.bufs = bufs
+	found := false
 	for i, b := range a.bufs {
 		if b.Server == fs && b.Name == fn {
 			a.focus = i
+			found = true
+			break
+		}
+	}
+	if !found {
+		// The focused buffer was parked or removed: keep the same row,
+		// which now holds its neighbor, clamping at the end.
+		a.focus = min(a.focus, max(len(a.bufs)-1, 0))
+	}
+	a.hovered = -1
+	for i, b := range a.bufs {
+		if b.Server == hs && b.Name == hn {
+			a.hovered = i
 			break
 		}
 	}
@@ -917,14 +1006,11 @@ func (a *App) refreshBuffers() {
 	}
 }
 
-// sidebarDivider renders the rule separating a server's channels from its
-// query buffers.
-func (a *App) sidebarDivider() string {
-	w := a.sidebar.Width - 4
-	if w < 8 {
-		w = 12
-	}
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  " + strings.Repeat("─", w))
+// sidebarDivider renders a labeled dim divider: "-- Messages --" between a
+// server's channels and its query buffers, "-- Archive --" above parked
+// buffers. The archive divider only appears when parked buffers exist.
+func (a *App) sidebarDivider(label string) string {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  -- " + label + " --")
 }
 
 func (a *App) renderSidebar() {
@@ -940,19 +1026,122 @@ func (a *App) renderSidebar() {
 			lastServer = buf.Server
 			lastRank = -1
 		}
-		if r := bufferRank(buf); r == 2 && lastRank < 2 {
-			b.WriteString(a.sidebarDivider() + "\n")
+		r := a.displayRank(buf)
+		if r == 2 && lastRank < 2 {
+			b.WriteString(a.sidebarDivider("Messages") + "\n")
 		}
-		lastRank = bufferRank(buf)
-		line := "  " + buf.Name
-		if i == a.focus {
-			line = lipgloss.NewStyle().Reverse(true).Render("> " + buf.Name)
-		} else if buf.Unread > 0 {
-			line = unreadStyle.Render("  " + buf.Name + " *")
+		if r == 3 && lastRank < 3 {
+			b.WriteString(a.sidebarDivider("Archive") + "\n")
 		}
-		b.WriteString(line + "\n")
+		lastRank = r
+		b.WriteString(a.sidebarRow(i, buf) + "\n")
 	}
 	a.sidebar.SetContent(b.String())
+}
+
+// sidebarRow renders one buffer line. The hovered row (server windows
+// excepted) grows click affordances on the right: x parks the buffer in the
+// archive, and archived rows also get + to recover them.
+func (a *App) sidebarRow(i int, buf *store.Buffer) string {
+	marker := "  "
+	if i == a.focus {
+		marker = "> "
+	}
+	text := marker + buf.Name
+	if i == a.hovered && bufferRank(buf) != 0 {
+		text = a.hoverText(marker, buf)
+	} else if buf.Unread > 0 && i != a.focus {
+		text += " *"
+	}
+	switch {
+	case i == a.focus:
+		return lipgloss.NewStyle().Reverse(true).Render(text)
+	case buf.Unread > 0:
+		return unreadStyle.Render(text)
+	default:
+		return text
+	}
+}
+
+// hoverText renders a hovered sidebar row with dim affordances pinned to the
+// right edge: "x" at sw-2 everywhere, plus "+" at sw-4 on archived rows to
+// recover them. Columns match sidebarAffordance's hit zones.
+func (a *App) hoverText(marker string, buf *store.Buffer) string {
+	sw := a.sidebarWidth()
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	r := []rune(truncateRunes(marker+buf.Name, sw-3))
+	for len(r) < sw-2 {
+		r = append(r, ' ')
+	}
+	if a.archived[memberKey(buf.Server, buf.Name)] {
+		return string(r[:sw-4]) + dim.Render("+") + " " + dim.Render("x")
+	}
+	return string(r) + dim.Render("x")
+}
+
+// sidebarAffordance maps a click's x-coordinate on row i to the hover
+// affordance action there: "close" (x), "recover" (+), or "" for a plain
+// click. Affordances only exist on the hovered row.
+func (a *App) sidebarAffordance(i int, x int) string {
+	if i != a.hovered || i < 0 || i >= len(a.bufs) {
+		return ""
+	}
+	b := a.bufs[i]
+	if bufferRank(b) == 0 {
+		return "" // the server window can't be parked
+	}
+	sw := a.sidebarWidth()
+	switch {
+	case x >= sw-2:
+		return "close"
+	case x >= sw-4 && a.archived[memberKey(b.Server, b.Name)]:
+		return "recover"
+	}
+	return ""
+}
+
+// closeBuffer handles the hover x: a sidebar buffer is parked in the
+// archive (channels stay joined); an archived buffer is removed from view
+// entirely. New activity in either returns the buffer to the sidebar.
+func (a *App) closeBuffer(i int) {
+	if i < 0 || i >= len(a.bufs) || bufferRank(a.bufs[i]) == 0 {
+		return
+	}
+	b := a.bufs[i]
+	key := memberKey(b.Server, b.Name)
+	wasFocused := i == a.focus
+	if a.archived[key] {
+		a.hidden[key] = true
+		delete(a.archived, key)
+	} else {
+		a.archived[key] = true
+	}
+	a.refreshBuffers()
+	if wasFocused && len(a.bufs) > 0 {
+		a.setFocus(min(i, len(a.bufs)-1))
+	}
+	a.renderSidebar()
+	a.renderChat()
+}
+
+// recoverBuffer handles the hover + on an archived buffer: it returns to
+// its grouping (channels with channels, queries under Messages) and takes
+// focus.
+func (a *App) recoverBuffer(i int) {
+	if i < 0 || i >= len(a.bufs) {
+		return
+	}
+	b := a.bufs[i]
+	delete(a.archived, memberKey(b.Server, b.Name))
+	a.refreshBuffers()
+	for j, ob := range a.bufs {
+		if ob.Server == b.Server && ob.Name == b.Name {
+			a.setFocus(j)
+			break
+		}
+	}
+	a.renderSidebar()
+	a.renderChat()
 }
 
 // topicVisible reports whether the focused buffer gets a topic panel:
