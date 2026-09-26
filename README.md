@@ -50,7 +50,8 @@ internal/ui          Bubble Tea models: sidebar, chat viewport, input, status ba
 - `enter` — send
 - `ctrl+c` — quit
 
-Slash commands: `/join #chan`, `/part [#chan]`, `/msg nick text`, `/quit`.
+Slash commands: `/join #chan`, `/part [#chan]`, `/msg nick text`,
+`/ctcp nick command [args]`, `/quit` (or `/q`).
 
 CTCP is supported: `/me`-style actions render inline, incoming queries
 (`VERSION`, `PING`, `TIME`, `FINGER`, `USERINFO`, `CLIENTINFO`) are answered

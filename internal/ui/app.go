@@ -534,6 +534,21 @@ func (a *App) sendCommand(cl *irc.Client, buf *store.Buffer, v string) tea.Cmd {
 			a.renderSidebar()
 			a.renderChat()
 		}
+	case "/ctcp":
+		// /ctcp <target> <command> [args] -> PRIVMSG target :\x01COMMAND args\x01
+		if len(parts) > 2 {
+			to := parts[1]
+			cmd := strings.ToUpper(parts[2])
+			args := ""
+			if len(parts) > 3 {
+				args = " " + strings.Join(parts[3:], " ")
+			}
+			_ = cl.Send("PRIVMSG " + to + " :\x01" + cmd + args + "\x01")
+			a.addLine(buf.Server, to, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: "CTCP " + cmd + args + " -> " + to, Kind: store.KindNotice})
+			a.bufs = a.st.Buffers()
+			a.renderSidebar()
+			a.renderChat()
+		}
 	case "/quit", "/q":
 		return tea.Quit
 	}
