@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"ircgo/internal/irc"
 	"ircgo/internal/store"
 )
 
@@ -71,5 +72,27 @@ func TestReplayedImageURLsFetchEndToEnd(t *testing.T) {
 		if !art {
 			t.Errorf("fetch for %s returned no art", u)
 		}
+	}
+}
+
+// TestJoinPropagatesReplayFetchCmd is the regression test for the real bug:
+// handleMessage's JOIN branch used to discard addLine's return value, so a
+// channel buffer created by JOIN never ran its replay image fetches.
+func TestJoinPropagatesReplayFetchCmd(t *testing.T) {
+	dir := t.TempDir()
+	a := newRestoreApp(t, dir)
+	a.addLine("srv", "#c", store.Line{Nick: "bob", Text: "see https://example.com/pic.png", Kind: store.KindChat})
+
+	b := newRestoreApp(t, dir)
+	join := &irc.Message{
+		Prefix:  "me!u@h",
+		Command: "JOIN",
+		Params:  []string{"#c"},
+	}
+	if cmd := b.handleMessage("srv", join); cmd == nil {
+		t.Fatal("JOIN for a new channel dropped the replay fetch cmd")
+	}
+	if len(b.imgInflight) != 1 {
+		t.Fatalf("imgInflight has %d urls, want 1", len(b.imgInflight))
 	}
 }

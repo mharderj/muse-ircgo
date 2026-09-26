@@ -287,6 +287,11 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 	at = at.Local()
 	nick := m.Nick()
 
+	// addLine can return fetch commands (image previews for replayed
+	// history when a buffer is first created); every branch below must
+	// propagate them instead of dropping them.
+	var cmd tea.Cmd
+
 	switch m.Command {
 	case "PRIVMSG":
 		if len(m.Params) < 2 {
@@ -351,7 +356,7 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 				target = a.bufs[a.focus].Name
 			}
 		}
-		a.addLine(server, target, store.Line{At: at, Nick: nick, Text: text, Kind: kind})
+		cmd = a.addLine(server, target, store.Line{At: at, Nick: nick, Text: text, Kind: kind})
 		a.bumpUnread(server, target, nick)
 	case "TOPIC":
 		if len(m.Params) < 1 {
@@ -360,13 +365,13 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 		ch := m.Params[0]
 		topic := m.Trailing()
 		a.st.Get(server, a.st.Resolve(server, ch)).Topic = topic
-		a.addLine(server, ch, store.Line{At: at, Nick: nick, Text: "changed the topic to: " + topic, Kind: store.KindSystem})
+		cmd = a.addLine(server, ch, store.Line{At: at, Nick: nick, Text: "changed the topic to: " + topic, Kind: store.KindSystem})
 	case "JOIN":
 		if len(m.Params) < 1 {
 			return nil
 		}
 		ch := m.Params[0]
-		a.addLine(server, ch, store.Line{At: at, Nick: nick, Text: "joined " + ch, Kind: store.KindJoin})
+		cmd = a.addLine(server, ch, store.Line{At: at, Nick: nick, Text: "joined " + ch, Kind: store.KindJoin})
 		if isChannel(ch) {
 			a.memberAdd(server, ch, nick, "")
 			a.renderNicks()
@@ -381,7 +386,7 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 		if len(m.Params) > 0 {
 			ch = m.Params[0]
 		}
-		a.addLine(server, ch, store.Line{At: at, Nick: nick, Text: "left " + ch, Kind: store.KindPart})
+		cmd = a.addLine(server, ch, store.Line{At: at, Nick: nick, Text: "left " + ch, Kind: store.KindPart})
 		if isChannel(ch) {
 			a.memberRemove(server, ch, nick)
 			a.renderNicks()
@@ -391,7 +396,7 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 			}
 		}
 	case "QUIT":
-		a.addLine(server, server, store.Line{At: at, Nick: nick, Text: "quit: " + m.Trailing(), Kind: store.KindQuit})
+		cmd = a.addLine(server, server, store.Line{At: at, Nick: nick, Text: "quit: " + m.Trailing(), Kind: store.KindQuit})
 		a.memberQuit(server, nick)
 		a.renderNicks()
 	case "KICK":
@@ -403,7 +408,7 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 		if reason := m.Trailing(); reason != "" && reason != target {
 			text += " (" + reason + ")"
 		}
-		a.addLine(server, ch, store.Line{At: at, Nick: nick, Text: text, Kind: store.KindSystem})
+		cmd = a.addLine(server, ch, store.Line{At: at, Nick: nick, Text: text, Kind: store.KindSystem})
 		if isChannel(ch) {
 			a.memberRemove(server, ch, target)
 			a.renderNicks()
@@ -425,7 +430,7 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 		} else {
 			buf = server // our own user modes land in the server window
 		}
-		a.addLine(server, buf, store.Line{At: at, Nick: nick, Text: text, Kind: store.KindSystem})
+		cmd = a.addLine(server, buf, store.Line{At: at, Nick: nick, Text: text, Kind: store.KindSystem})
 	case "INVITE":
 		ch := m.Trailing()
 		if ch == "" && len(m.Params) > 1 {
@@ -434,10 +439,10 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 		if ch == "" {
 			return nil
 		}
-		a.addLine(server, server, store.Line{At: at, Nick: nick, Text: "invited you to " + ch + " — /join " + ch, Kind: store.KindSystem})
+		cmd = a.addLine(server, server, store.Line{At: at, Nick: nick, Text: "invited you to " + ch + " — /join " + ch, Kind: store.KindSystem})
 	case "NICK":
 		newNick := m.Trailing()
-		a.addLine(server, server, store.Line{At: at, Nick: nick, Text: "is now known as " + newNick, Kind: store.KindSystem})
+		cmd = a.addLine(server, server, store.Line{At: at, Nick: nick, Text: "is now known as " + newNick, Kind: store.KindSystem})
 		a.memberRename(server, nick, newNick)
 		if nick == a.ownNick(server) {
 			a.setOwnNick(server, newNick)
@@ -457,7 +462,7 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 				if text == "" && len(m.Params) > 1 {
 					text = strings.Join(m.Params[1:], " ")
 				}
-				a.addLine(server, server, store.Line{At: at, Text: text, Kind: store.KindSystem})
+				cmd = a.addLine(server, server, store.Line{At: at, Text: text, Kind: store.KindSystem})
 			case "353":
 				// RPL_NAMREPLY: track membership, keep it out of scrollback.
 				a.handleNames(server, m.Trailing(), m.Params)
@@ -481,11 +486,11 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 					}
 					text += ": " + t
 				}
-				a.addLine(server, server, store.Line{At: at, Text: text, Kind: store.KindSystem})
+				cmd = a.addLine(server, server, store.Line{At: at, Text: text, Kind: store.KindSystem})
 			}
 		}
 	}
-	return nil
+	return cmd
 }
 
 // queueImageFetches starts background fetches for image URLs in a chat
@@ -922,24 +927,31 @@ func (a *App) renderChat() {
 	var b strings.Builder
 	for _, l := range buf.Lines() {
 		ts := l.At.Format(a.cfg.UI.TimestampFormat)
+		tsW := visibleWidth(ts)
 		switch l.Kind {
 		case store.KindChat:
-			fmt.Fprintf(&b, "%s %s %s\n",
-				tsStyle.Render(ts),
-				nickStyle.Render(fmt.Sprintf("%-14s", l.Nick)),
-				link.Style(irc.FormatText(l.Text), func(s string) string {
-					return linkStyle.Render(s)
-				}))
+			// 14-wide nick column plus the two separating spaces.
+			prefixW := tsW + 1 + 15
+			prefix := tsStyle.Render(ts) + " " +
+				nickStyle.Render(fmt.Sprintf("%-14s", l.Nick)) + " "
+			text := link.Style(irc.FormatText(l.Text), func(s string) string {
+				return linkStyle.Render(s)
+			})
+			a.writeChatRow(&b, prefix, prefixW, text)
 		case store.KindAction:
-			fmt.Fprintf(&b, "%s %s\n", tsStyle.Render(ts),
-				sysStyle.Render("* "+l.Nick+" ")+irc.FormatStyled(l.Text, sysStyle))
+			prefixW := tsW + 1
+			prefix := tsStyle.Render(ts) + " "
+			text := sysStyle.Render("* "+l.Nick+" ") + irc.FormatStyled(l.Text, sysStyle)
+			a.writeChatRow(&b, prefix, prefixW, text)
 		case store.KindImage:
 			// Half-block art rows are pre-wrapped; indent under the message.
 			for _, row := range strings.Split(l.Text, "\n") {
 				fmt.Fprintf(&b, "  %s\n", row)
 			}
 		default:
-			fmt.Fprintf(&b, "%s %s\n", tsStyle.Render(ts), sysStyle.Render(l.Text))
+			prefixW := tsW + 1
+			prefix := tsStyle.Render(ts) + " "
+			a.writeChatRow(&b, prefix, prefixW, sysStyle.Render(l.Text))
 		}
 	}
 	a.chat.SetContent(b.String())
@@ -952,6 +964,27 @@ func (a *App) renderChat() {
 		plain[i] = stripANSI(r)
 	}
 	a.chatContentRows = plain
+}
+
+// writeChatRow writes one logical chat line as physical rows: prefix plus
+// the first wrapped row, then continuation rows (already indented) under it.
+func (a *App) writeChatRow(b *strings.Builder, prefix string, prefixW int, text string) {
+	rows := a.wrapText(text, prefixW)
+	b.WriteString(prefix + rows[0] + "\n")
+	for _, r := range rows[1:] {
+		b.WriteString(r + "\n")
+	}
+}
+
+// wrapText wraps styled text to the chat width, indenting continuation
+// lines by indentW cells. Before the first real layout (or on an absurdly
+// narrow pane) it returns the text unwrapped.
+func (a *App) wrapText(text string, indentW int) []string {
+	w := a.chat.Width
+	if w < 40 || w-indentW < 20 {
+		return []string{text}
+	}
+	return wrapANSI(text, w-indentW, strings.Repeat(" ", indentW))
 }
 
 func (a *App) resize() {
