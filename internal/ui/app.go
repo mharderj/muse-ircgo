@@ -212,9 +212,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// land in the input line.
 		if msg.Action == tea.MouseActionMotion {
 			if i, ok := a.sidebarBufferAt(msg.X, msg.Y); ok {
-				a.hovered = i
-			} else {
+				if a.hovered != i {
+					a.hovered = i
+					a.renderSidebar()
+				}
+			} else if a.hovered != -1 {
 				a.hovered = -1
+				a.renderSidebar()
 			}
 			return a, nil
 		}

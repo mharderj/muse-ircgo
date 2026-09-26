@@ -224,3 +224,35 @@ func TestServerWindowNotCloseable(t *testing.T) {
 		}
 	}
 }
+
+// Hovering a buffer row must re-render the sidebar so the close affordance
+// appears; moving off must clear it again. Regression test: the motion
+// handler used to update hover state without re-rendering, so the "x" never
+// showed on screen.
+func TestHoverReRendersSidebarWithCloseX(t *testing.T) {
+	a := archiveTestApp(t)
+	before := a.sidebar.View()
+	if strings.Contains(before, "x") {
+		t.Fatalf("close affordance visible before any hover:\n%s", before)
+	}
+	// Buffers: rows are 0=server header, 1=server window, 2=channel,
+	// 3="-- Messages --" divider, 4=amy (PM), 5=bob (PM). Hover amy's row.
+	u, _ := a.Update(tea.MouseMsg{Action: tea.MouseActionMotion, X: 2, Y: 4})
+	a = u.(*App)
+	if a.hovered != 2 {
+		t.Fatalf("hovered = %d, want 2", a.hovered)
+	}
+	after := a.sidebar.View()
+	if !strings.Contains(after, "x") {
+		t.Fatalf("close affordance not rendered after hover:\n%s", after)
+	}
+	// Moving off the sidebar clears the affordance.
+	u, _ = a.Update(tea.MouseMsg{Action: tea.MouseActionMotion, X: 100, Y: 3})
+	a = u.(*App)
+	if a.hovered != -1 {
+		t.Fatalf("hovered = %d, want -1 after moving off", a.hovered)
+	}
+	if strings.Contains(a.sidebar.View(), "x") {
+		t.Fatalf("close affordance still visible after moving off:\n%s", a.sidebar.View())
+	}
+}
