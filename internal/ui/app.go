@@ -215,14 +215,13 @@ func (a *App) handleMessage(server string, m *irc.Message) {
 		if nick == "*status" {
 			target = server
 		} else if cmd, args, ok := irc.ParseCTCP(text); ok {
-			// CTCP replies read better in the sender's buffer than
-			// buried in the server window.
+			// CTCP replies land in the active buffer for now.
 			text = "CTCP " + cmd
 			if args != "" {
 				text += ": " + args
 			}
-			if target == server && nick != "" {
-				target = nick
+			if len(a.bufs) > 0 && a.focus < len(a.bufs) && a.bufs[a.focus].Server == server {
+				target = a.bufs[a.focus].Name
 			}
 		}
 		a.addLine(server, target, store.Line{At: at, Nick: nick, Text: text, Kind: kind})
@@ -544,7 +543,9 @@ func (a *App) sendCommand(cl *irc.Client, buf *store.Buffer, v string) tea.Cmd {
 				args = " " + strings.Join(parts[3:], " ")
 			}
 			_ = cl.Send("PRIVMSG " + to + " :\x01" + cmd + args + "\x01")
-			a.addLine(buf.Server, to, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: "CTCP " + cmd + args + " -> " + to, Kind: store.KindNotice})
+			// Log the outgoing query in the active buffer instead of
+			// opening a buffer for the target.
+			a.addLine(buf.Server, buf.Name, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: "CTCP " + cmd + args + " -> " + to, Kind: store.KindNotice})
 			a.bufs = a.st.Buffers()
 			a.renderSidebar()
 			a.renderChat()
