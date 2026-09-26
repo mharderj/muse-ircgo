@@ -18,7 +18,6 @@ const (
 	KindNotice
 	KindAction
 	KindSystem
-	KindImage // rendered image preview (half-block art)
 )
 
 // Line is one rendered row in a buffer.
@@ -27,6 +26,13 @@ type Line struct {
 	Nick string
 	Text string
 	Kind Kind
+	// Seq is the buffer-local sequence number assigned by Buffer.Append.
+	// It identifies the line for attaching image previews.
+	Seq uint64
+	// Art holds rendered image previews, one slot per image URL in Text.
+	// A nil slot means no preview yet (fetch pending or failed). Art is
+	// transient: it is never written to the log.
+	Art []string
 }
 
 // maxLines caps scrollback per buffer.
@@ -40,14 +46,36 @@ type Buffer struct {
 	// Unread counts incoming messages since the buffer was last focused.
 	Unread int
 	lines  []Line
+	// nextSeq is the sequence number assigned to the next appended line.
+	nextSeq uint64
 }
 
-// Append adds a line, trimming old scrollback past the cap.
-func (b *Buffer) Append(l Line) {
+// Append adds a line, trimming old scrollback past the cap. It assigns the
+// line a buffer-local sequence number and returns it.
+func (b *Buffer) Append(l Line) uint64 {
+	l.Seq = b.nextSeq
+	b.nextSeq++
 	b.lines = append(b.lines, l)
 	if len(b.lines) > maxLines {
 		b.lines = b.lines[len(b.lines)-maxLines:]
 	}
+	return l.Seq
+}
+
+// SetImageArt attaches a rendered image preview to the line with the given
+// sequence number, at the given URL slot. It reports whether the line was
+// found (it may have scrolled out of the capped scrollback).
+func (b *Buffer) SetImageArt(seq uint64, slot int, art string) bool {
+	for i := range b.lines {
+		if b.lines[i].Seq == seq {
+			for len(b.lines[i].Art) <= slot {
+				b.lines[i].Art = append(b.lines[i].Art, "")
+			}
+			b.lines[i].Art[slot] = art
+			return true
+		}
+	}
+	return false
 }
 
 // Lines returns a copy of the buffer's lines.

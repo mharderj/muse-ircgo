@@ -29,14 +29,16 @@ func TestAddLineLogs(t *testing.T) {
 	at := time.Date(2026, 9, 26, 14, 18, 4, 0, time.Local)
 	a.addLine("srv", "#a", store.Line{At: at, Nick: "bob", Text: "first", Kind: store.KindChat})
 	a.addLine("srv", "#a", store.Line{At: at, Nick: "bob", Text: "second", Kind: store.KindChat})
-	// Image art is not logged.
-	a.addLine("srv", "#a", store.Line{At: at, Text: "art", Kind: store.KindImage})
+	// Image art attached to a message is not logged.
+	a.addLine("srv", "#a", store.Line{At: at, Nick: "bob", Text: "see https://x.test/pic.png", Kind: store.KindChat})
+	lines := a.st.Get("srv", "#a").Lines()
+	a.st.Get("srv", "#a").SetImageArt(lines[len(lines)-1].Seq, 0, "ART")
 
 	data, err := os.ReadFile(history.Path("srv", "#a"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "[2026-09-26 14:18:04] <bob> first\n[2026-09-26 14:18:04] <bob> second\n"
+	want := "[2026-09-26 14:18:04] <bob> first\n[2026-09-26 14:18:04] <bob> second\n[2026-09-26 14:18:04] <bob> see https://x.test/pic.png\n"
 	if string(data) != want {
 		t.Fatalf("log = %q, want %q", data, want)
 	}

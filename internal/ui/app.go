@@ -35,8 +35,16 @@ type eventsClosedMsg struct{}
 // imageFetchedMsg arrives when a background image fetch finishes; art is
 // empty when the fetch failed.
 type imageFetchedMsg struct {
-	server, buf, url string
-	art              string
+	url string
+	art string
+}
+
+// artSlot identifies one image-URL slot on one message line: the preview
+// belongs directly under that message, not at the end of the buffer.
+type artSlot struct {
+	server, buf string
+	seq         uint64
+	slot        int
 }
 
 // waitForEvents returns a Cmd that yields the next IRC event.
@@ -98,9 +106,11 @@ type App struct {
 	// updated from 001 and NICK echoes (including "_" 433 fallbacks).
 	ownNicks map[string]string
 
-	// Image previews: fetched art by URL, and URLs currently fetching.
+	// Image previews: fetched art by URL, URLs currently fetching, and the
+	// message-line slots waiting on each in-flight fetch.
 	imgCache    map[string]string
 	imgInflight map[string]bool
+	imgPending  map[string][]artSlot
 
 	sidebar viewport.Model
 	chat    viewport.Model
@@ -130,6 +140,7 @@ func New(cfg *config.Config, st *store.Store, events <-chan irc.Event, clients m
 		ownNicks:    map[string]string{},
 		imgCache:    map[string]string{},
 		imgInflight: map[string]bool{},
+		imgPending:  map[string][]artSlot{},
 	}
 }
 
@@ -248,9 +259,17 @@ func (a *App) addLine(server, target string, l store.Line) tea.Cmd {
 	if isNew {
 		cmd = a.playbackHistory(server, target, buf)
 	}
-	buf.Append(l)
+	seq := buf.Append(l)
 	if text, ok := history.FormatLine(l); ok {
 		history.AppendLine(server, target, text)
+	}
+	// Queue image previews for the line itself, attaching them to it when
+	// they arrive (see artSlot): live and replayed lines share this path.
+	switch l.Kind {
+	case store.KindChat, store.KindAction, store.KindNotice:
+		if q := a.queueImageFetches(server, target, seq, l.Text); q != nil {
+			cmd = tea.Batch(cmd, q)
+		}
 	}
 	return cmd
 }
@@ -271,7 +290,7 @@ func (a *App) playbackHistory(server, target string, buf *store.Buffer) tea.Cmd 
 	for _, l := range buf.Lines() {
 		switch l.Kind {
 		case store.KindChat, store.KindAction, store.KindNotice:
-			cmds = append(cmds, a.queueImageFetches(server, target, l.Text))
+			cmds = append(cmds, a.queueImageFetches(server, target, l.Seq, l.Text))
 		}
 	}
 	return tea.Batch(cmds...)
@@ -332,9 +351,6 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 		}
 		addCmd := a.addLine(server, buf, store.Line{At: at, Nick: nick, Text: text, Kind: kind})
 		a.bumpUnread(server, buf, nick)
-		if kind == store.KindChat {
-			return tea.Batch(addCmd, a.queueImageFetches(server, buf, text))
-		}
 		return addCmd
 	case "NOTICE":
 		text := m.Trailing()
@@ -495,8 +511,16 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 
 // queueImageFetches starts background fetches for image URLs in a chat
 // message. Each fetch renders half-block art and reports back as an
-// imageFetchedMsg; already-cached or in-flight URLs are skipped.
-func (a *App) queueImageFetches(server, buf, text string) tea.Cmd {
+// imageFetchedMsg; already-cached or in-flight URLs are skipped (a second
+// message sharing an in-flight URL gets the art from the same fetch).
+// seq/slot identify the message line each URL came from, so the finished
+// preview lands directly under its message instead of at the end of the
+// buffer.
+func (a *App) queueImageFetches(server, buf string, seq uint64, text string) tea.Cmd {
+	urls := img.FindURLs(text)
+	if len(urls) == 0 {
+		return nil
+	}
 	w := a.chat.Width - 2 // leave room for the indent
 	if w > 48 {
 		w = 48
@@ -505,10 +529,12 @@ func (a *App) queueImageFetches(server, buf, text string) tea.Cmd {
 		w = 8
 	}
 	var cmds []tea.Cmd
-	for _, u := range img.FindURLs(text) {
-		if _, ok := a.imgCache[u]; ok {
+	for i, u := range urls {
+		if art, ok := a.imgCache[u]; ok {
+			a.setLineArt(server, buf, seq, i, art)
 			continue
 		}
+		a.imgPending[u] = append(a.imgPending[u], artSlot{server: server, buf: buf, seq: seq, slot: i})
 		if a.imgInflight[u] {
 			continue
 		}
@@ -517,29 +543,37 @@ func (a *App) queueImageFetches(server, buf, text string) tea.Cmd {
 		cmds = append(cmds, func() tea.Msg {
 			m, err := img.Fetch(context.Background(), url)
 			if err != nil {
-				return imageFetchedMsg{server: server, buf: buf, url: url}
+				return imageFetchedMsg{url: url}
 			}
-			return imageFetchedMsg{server: server, buf: buf, url: url, art: img.Render(m, w, 12)}
+			return imageFetchedMsg{url: url, art: img.Render(m, w, 12)}
 		})
 	}
 	return tea.Batch(cmds...)
 }
 
+// setLineArt attaches a finished preview to its message line. The buffer
+// may be gone (parted while fetching): don't resurrect it.
+func (a *App) setLineArt(server, buf string, seq uint64, slot int, art string) {
+	if !a.st.Has(server, buf) {
+		return
+	}
+	a.st.Get(server, buf).SetImageArt(seq, slot, art)
+}
+
 // handleImageFetched files a finished preview into scrollback. Failures
-// (empty art) are cached so a URL isn't refetched every time it appears.
+// (empty art) are not cached: a re-posted URL gets a fresh attempt instead
+// of being poisoned for the rest of the session.
 func (a *App) handleImageFetched(msg imageFetchedMsg) {
 	delete(a.imgInflight, msg.url)
+	slots := a.imgPending[msg.url]
+	delete(a.imgPending, msg.url)
 	if msg.art == "" {
-		// Don't cache failures: a re-posted URL gets a fresh attempt
-		// instead of being poisoned for the rest of the session.
 		return
 	}
 	a.imgCache[msg.url] = msg.art
-	// The buffer may be gone (parted while fetching): don't resurrect it.
-	if !a.st.Has(msg.server, msg.buf) {
-		return
+	for _, s := range slots {
+		a.setLineArt(s.server, s.buf, s.seq, s.slot, msg.art)
 	}
-	a.addLine(msg.server, msg.buf, store.Line{At: time.Now(), Text: msg.art, Kind: store.KindImage})
 	a.refreshBuffers()
 	if a.ready {
 		a.renderChat()
@@ -943,15 +977,20 @@ func (a *App) renderChat() {
 			prefix := tsStyle.Render(ts) + " "
 			text := sysStyle.Render("* "+l.Nick+" ") + irc.FormatStyled(l.Text, sysStyle)
 			a.writeChatRow(&b, prefix, prefixW, text)
-		case store.KindImage:
-			// Half-block art rows are pre-wrapped; indent under the message.
-			for _, row := range strings.Split(l.Text, "\n") {
-				fmt.Fprintf(&b, "  %s\n", row)
-			}
 		default:
 			prefixW := tsW + 1
 			prefix := tsStyle.Render(ts) + " "
 			a.writeChatRow(&b, prefix, prefixW, sysStyle.Render(l.Text))
+		}
+		// Image previews live on their message line; render them directly
+		// underneath it. Art rows are pre-wrapped: never re-wrap them.
+		for _, art := range l.Art {
+			if art == "" {
+				continue
+			}
+			for _, row := range strings.Split(art, "\n") {
+				fmt.Fprintf(&b, "  %s\n", row)
+			}
 		}
 	}
 	a.chat.SetContent(b.String())
@@ -1074,7 +1113,7 @@ func (a *App) sendInput(v string) tea.Cmd {
 	_ = cl.Send("PRIVMSG " + target + " :" + v)
 	addCmd := a.addLine(buf.Server, target, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: v, Kind: store.KindChat})
 	a.renderChat()
-	return tea.Batch(addCmd, a.queueImageFetches(buf.Server, target, v))
+	return addCmd
 }
 
 func (a *App) ownNick(server string) string {
@@ -1192,7 +1231,7 @@ func (a *App) sendCommand(cl *irc.Client, buf *store.Buffer, v string) tea.Cmd {
 			a.refreshBuffers()
 			a.renderSidebar()
 			a.renderChat()
-			return tea.Batch(addCmd, a.queueImageFetches(buf.Server, to, text))
+			return addCmd
 		}
 	case "/me":
 		// /me does an emote in the focused buffer (CTCP ACTION).
@@ -1201,7 +1240,7 @@ func (a *App) sendCommand(cl *irc.Client, buf *store.Buffer, v string) tea.Cmd {
 			_ = cl.Send("PRIVMSG " + buf.Name + " :\x01ACTION " + text + "\x01")
 			addCmd := a.addLine(buf.Server, buf.Name, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: text, Kind: store.KindAction})
 			a.renderChat()
-			return tea.Batch(addCmd, a.queueImageFetches(buf.Server, buf.Name, text))
+			return addCmd
 		}
 	case "/nick":
 		// The server confirms with a NICK echo (or 433 -> "_" fallback);

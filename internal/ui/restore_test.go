@@ -90,13 +90,13 @@ func TestRestoreQueryBuffers(t *testing.T) {
 func TestFailedFetchIsNotCached(t *testing.T) {
 	a := kickTestApp()
 	url := "https://example.com/x.png"
-	a.handleImageFetched(imageFetchedMsg{server: "srv", buf: "b", url: url})
+	a.handleImageFetched(imageFetchedMsg{url: url})
 	if _, ok := a.imgCache[url]; ok {
 		t.Fatal("failed fetch was cached, poisoning the URL for the session")
 	}
 	// A re-posted URL gets a fresh fetch attempt instead of a cache hit
 	// on the earlier failure.
-	cmd := a.queueImageFetches("srv", "b", "see "+url)
+	cmd := a.queueImageFetches("srv", "b", 0, "see "+url)
 	if cmd == nil {
 		t.Fatal("no fetch queued for re-posted URL")
 	}

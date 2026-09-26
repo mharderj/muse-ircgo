@@ -47,8 +47,15 @@ func TestFormatParseRoundTrip(t *testing.T) {
 }
 
 func TestFormatLineSkipsImage(t *testing.T) {
-	if _, ok := FormatLine(store.Line{Kind: store.KindImage, Text: "art"}); ok {
-		t.Fatal("image art should not be logged")
+	// Art attached to a message line is transient and never logged.
+	l := store.Line{Kind: store.KindChat, Nick: "bob", Text: "see pic"}
+	l.Art = []string{"ART"}
+	form, ok := FormatLine(l)
+	if !ok {
+		t.Fatal("chat line with art should still be logged")
+	}
+	if strings.Contains(form, "ART") {
+		t.Fatalf("art was logged: %q", form)
 	}
 	if _, ok := ParseLine("not a log line"); ok {
 		t.Fatal("ParseLine accepted garbage")

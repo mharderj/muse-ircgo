@@ -100,7 +100,9 @@ func TestRenderChatLeavesArtUnwrapped(t *testing.T) {
 	a.refreshBuffers()
 	a.focus = 1
 	art := strings.Repeat("▄", 40) + "\n" + strings.Repeat("▀", 40)
-	a.addLine("srv", "#c", store.Line{Text: art, Kind: store.KindImage})
+	a.addLine("srv", "#c", store.Line{Nick: "bob", Text: "see https://x.test/pic.png", Kind: store.KindChat})
+	lines := a.st.Get("srv", "#c").Lines()
+	a.st.Get("srv", "#c").SetImageArt(lines[len(lines)-1].Seq, 0, art)
 	a.chat = viewport.New(50, 20)
 	a.renderChat()
 	found := 0

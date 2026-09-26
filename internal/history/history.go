@@ -62,8 +62,6 @@ func FormatLine(l store.Line) (string, bool) {
 		return fmt.Sprintf("[%s] * %s %s", ts, l.Nick, text), true
 	case store.KindNotice:
 		return fmt.Sprintf("[%s] -%s- %s", ts, l.Nick, text), true
-	case store.KindImage:
-		return "", false
 	default:
 		if l.Nick != "" {
 			return fmt.Sprintf("[%s] -- %s %s", ts, l.Nick, text), true
