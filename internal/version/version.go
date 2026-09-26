@@ -2,5 +2,5 @@
 // the -version flag and the CTCP VERSION reply both read it.
 package version
 
-// Version is the current release, e.g. "0.1.6".
-const Version = "0.1.6"
+// Version is the current release, e.g. "0.1.7".
+const Version = "0.1.7"
