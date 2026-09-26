@@ -72,6 +72,7 @@ internal/version     release version (`-version`, CTCP VERSION replies)
 ## Keys
 
 - `tab` — cycle buffers (channels, queries, server windows)
+- `alt+1` … `alt+9` — jump to a buffer by its sidebar position, top to bottom
 - `enter` — send
 - mouse: left-click a buffer in the sidebar to switch to it
 

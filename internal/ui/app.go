@@ -156,6 +156,21 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 	case tea.KeyMsg:
+		// alt+1..alt+9 jumps straight to the buffer in that sidebar
+		// position (top to bottom). Note: ctrl+digit would be the more
+		// familiar binding, but terminals don't transmit it in a form
+		// this Bubble Tea version can decode, so it can never arrive.
+		if s := msg.String(); len(s) == 5 && strings.HasPrefix(s, "alt+") {
+			if d := s[4]; d >= '1' && d <= '9' {
+				if i := int(d - '1'); i < len(a.bufs) && i != a.focus {
+					a.focus = i
+					// Mirror tab: re-lay out, since the nick pane
+					// only appears for channel buffers.
+					a.resize()
+				}
+				return a, nil
+			}
+		}
 		switch msg.String() {
 		case "tab":
 			if len(a.bufs) > 0 {
