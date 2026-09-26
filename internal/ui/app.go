@@ -347,7 +347,7 @@ func (a *App) renderNicks() {
 func ctcpReply(cmd, args string) string {
 	switch cmd {
 	case "VERSION":
-		return "VERSION ircgo " + version.Version
+		return "VERSION Muse-IRCGO " + version.Version + " (vibed lul)"
 	case "PING":
 		if args == "" {
 			return ""
