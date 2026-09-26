@@ -14,6 +14,29 @@ func testApp() *App {
 	return New(&config.Config{}, store.New(), nil, nil)
 }
 
+func TestRenderNicksDivider(t *testing.T) {
+	a := testApp()
+	a.addLine("srv", "srv", store.Line{Text: "hi"})
+	a.addLine("srv", "#c", store.Line{Text: "hi"})
+	a.refreshBuffers()
+	a.focus = 1 // #c
+	a.memberAdd("srv", "#c", "bob", "@")
+	a.memberAdd("srv", "#c", "amy", "")
+	a.width, a.height = 100, 30
+	a.resize()
+	a.renderNicks()
+	v := a.nicks.View()
+	header := strings.Index(v, "(2)")
+	div := strings.Index(v, "──")
+	nick := strings.Index(v, "@bob")
+	if header < 0 || div < 0 || nick < 0 {
+		t.Fatalf("missing header/divider/nick in:\n%s", v)
+	}
+	if !(header < div && div < nick) {
+		t.Fatalf("divider not between header and nicks:\n%s", v)
+	}
+}
+
 func TestMemberSort(t *testing.T) {
 	a := testApp()
 	a.memberAdd("srv", "#c", "zed", "")

@@ -632,6 +632,13 @@ func (a *App) renderNicks() {
 	names := a.members[memberKey(buf.Server, buf.Name)].sorted()
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s (%d)\n", buf.Name, len(names))
+	// Dim rule separating the channel header from the roster, matching
+	// the sidebar's channel/DM divider.
+	w := a.nicks.Width - 4
+	if w < 8 {
+		w = 12
+	}
+	b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  "+strings.Repeat("─", w)) + "\n")
 	for _, n := range names {
 		b.WriteString(n.prefix + n.nick + "\n")
 	}
