@@ -53,6 +53,7 @@ internal/version     release version (`-version`, CTCP VERSION replies)
 
 - `tab` — cycle buffers (channels, queries, server windows)
 - `enter` — send
+- mouse: left-click a buffer in the sidebar to switch to it
 
 Quit with `/quit` (or `/q`) — `ctrl+c` no longer closes the app.
 
@@ -82,5 +83,6 @@ It hides on narrow terminals.
 - Reconnect with backoff
 - Scrollback-preserving scroll (pgup/pgdn without snap-to-bottom)
 - Mouse support, clickable buffer list
+- Scroll wheel: scroll chat history
 - SASL EXTERNAL (client certs)
 - Configurable keybinds and themes

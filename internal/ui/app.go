@@ -102,6 +102,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ircEventMsg:
 		a.handleEvent(msg.ev)
 		return a, waitForEvents(a.events)
+	case tea.MouseMsg:
+		// Left-click a sidebar buffer to switch to it. All other mouse
+		// input is swallowed so clicks don't land in the input line.
+		if msg.Action == tea.MouseActionRelease && msg.Button == tea.MouseButtonLeft {
+			if i, ok := a.sidebarBufferAt(msg.X, msg.Y); ok && i != a.focus {
+				a.focus = i
+				// Mirror tab: re-lay out, since the nick pane
+				// only appears for channel buffers.
+				a.resize()
+			}
+		}
+		return a, nil
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "tab":
@@ -372,6 +384,44 @@ func isNumeric(s string) bool {
 		}
 	}
 	return true
+}
+
+// sidebarBufferAt maps a mouse click to a buffer index. The sidebar renders
+// server headers and blank separators between servers, so screen rows don't
+// line up 1:1 with buffers; this replays that layout to find the buffer on
+// the clicked row. ok is false for headers, separators, blank space, and
+// clicks outside the sidebar.
+func (a *App) sidebarBufferAt(x, y int) (i int, ok bool) {
+	sw := a.cfg.UI.SidebarWidth
+	if sw < 16 {
+		sw = 16
+	}
+	if x < 0 || x > sw || y < 0 {
+		return 0, false // x == sw is the sidebar's right border
+	}
+	row := y + a.sidebar.YOffset // the sidebar viewport may be scrolled
+	r := 0
+	lastServer := ""
+	for idx, buf := range a.bufs {
+		if buf.Server != lastServer {
+			if lastServer != "" {
+				if r == row {
+					return 0, false // separator line
+				}
+				r++
+			}
+			if r == row {
+				return 0, false // server header line
+			}
+			r++
+			lastServer = buf.Server
+		}
+		if r == row {
+			return idx, true
+		}
+		r++
+	}
+	return 0, false
 }
 
 func (a *App) renderSidebar() {

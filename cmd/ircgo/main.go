@@ -63,7 +63,10 @@ func main() {
 		go cl.Run(ctx)
 	}
 
-	p := tea.NewProgram(ui.New(cfg, st, events, clients), tea.WithAltScreen())
+	p := tea.NewProgram(ui.New(cfg, st, events, clients),
+		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(), // click sidebar buffers to switch
+	)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "ircgo: %v\n", err)
 		os.Exit(1)
