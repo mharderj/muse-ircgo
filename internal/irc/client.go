@@ -4,8 +4,16 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"ircgo/internal/config"
+)
+
+// reconnectInitial/reconnectMax bound the backoff between connection
+// attempts. Vars so tests can shrink them.
+var (
+	reconnectInitial = 2 * time.Second
+	reconnectMax     = 5 * time.Minute
 )
 
 // EventKind classifies an Event.
@@ -52,11 +60,19 @@ type Client struct {
 	conn       *Conn
 	capOffered map[string]bool
 	ctx        context.Context // connection lifetime, set by Run
+
+	// nick is the nick we're currently trying to register as; a 433
+	// (nickname in use) appends "_" and retries. Reset to the configured
+	// nick at the start of every connection attempt.
+	nick string
+	// registered is set when 001 arrives; a healthy session resets the
+	// reconnect backoff.
+	registered bool
 }
 
 // New returns a client that publishes events to the channel.
 func New(cfg config.Server, events chan<- Event) *Client {
-	return &Client{cfg: cfg, events: events, capOffered: map[string]bool{}}
+	return &Client{cfg: cfg, events: events, capOffered: map[string]bool{}, nick: cfg.Nick}
 }
 
 func (c *Client) emit(e Event) {
@@ -90,10 +106,41 @@ func (c *Client) Send(line string) error {
 	return c.conn.Send(line)
 }
 
-// Run connects, registers, and pumps messages until ctx is cancelled or the
-// connection drops.
+// Run connects, registers, and pumps messages, reconnecting with
+// exponential backoff until ctx is cancelled. A dropped connection used to
+// leave the UI looking alive while dead; now the UI sees "disconnected",
+// a retry notice, and "connected" again when the session recovers.
 func (c *Client) Run(ctx context.Context) {
 	c.ctx = ctx
+	backoff := reconnectInitial
+	for {
+		c.runOnce(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if c.registered {
+			// The last session was healthy: start the backoff over so a
+			// flaky network doesn't wedge us at the maximum delay.
+			backoff = reconnectInitial
+		}
+		c.emit(Event{Kind: KindError, Text: fmt.Sprintf("reconnecting in %v", backoff)})
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		if backoff > reconnectMax {
+			backoff = reconnectMax
+		}
+	}
+}
+
+// runOnce makes a single connection attempt: dial, register, and pump
+// messages until the connection drops or ctx is cancelled.
+func (c *Client) runOnce(ctx context.Context) {
+	c.nick = c.cfg.Nick // fresh attempt at the preferred nick
+	c.registered = false
 	conn, err := Dial(c.cfg.Name, c.cfg.Host, c.port(), c.cfg.TLS, c.cfg.InsecureSkipVerify)
 	if err != nil {
 		c.emit(Event{Kind: KindError, Text: fmt.Sprintf("dial %s: %v", c.cfg.Addr(), err)})
@@ -158,8 +205,8 @@ func (c *Client) register() error {
 	}
 	for _, line := range []string{
 		"CAP LS 302",
-		"NICK " + c.cfg.Nick,
-		fmt.Sprintf("USER %s 0 * :ircgo", c.cfg.Nick),
+		"NICK " + c.nick,
+		fmt.Sprintf("USER %s 0 * :ircgo", c.nick),
 	} {
 		debugf(c.cfg.Name, "-> %s", line)
 		if err := c.Send(line); err != nil {
@@ -183,10 +230,17 @@ func (c *Client) handle(m *Message) {
 		c.handleAuthenticate(m)
 		return
 	case "001": // welcome: registration complete
+		c.registered = true
 		debugf(c.cfg.Name, "registered, joining %d channel(s)", len(c.cfg.Channels))
 		for _, ch := range c.cfg.Channels {
 			_ = c.Send("JOIN " + ch)
 		}
+	case "433": // nickname in use: fall back and keep registering
+		c.nick += "_"
+		_ = c.Send("NICK " + c.nick)
+		// Deliberately falls through to emit: the UI shows the server's
+		// "Nickname is already in use" line and learns the real nick
+		// from 001's target parameter.
 	case "903": // SASL success
 		_ = c.Send("CAP END")
 	case "904", "905": // SASL failure

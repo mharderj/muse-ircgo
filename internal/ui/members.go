@@ -62,6 +62,55 @@ func (a *App) memberRename(server, oldNick, newNick string) {
 	}
 }
 
+// modePrefix maps channel status modes to the nick-list prefix they grant.
+var modePrefix = map[byte]string{
+	'q': "~", // owner
+	'a': "&", // admin
+	'o': "@", // op
+	'h': "%", // half-op
+	'v': "+", // voice
+}
+
+// applyModePrefixes updates the nick list for channel status-mode changes
+// ("+o-v nick …"). Only prefix modes are tracked; everything else is
+// display-only. Args are consumed for every parameter-taking mode (including
+// untracked ones like +b) so alignment survives mixed mode strings.
+func (a *App) applyModePrefixes(server, channel, modes string, args []string) {
+	sign := byte('+')
+	ai := 0
+	for i := 0; i < len(modes); i++ {
+		c := modes[i]
+		if c == '+' || c == '-' {
+			sign = c
+			continue
+		}
+		takesArg := strings.ContainsRune("ovqahbeiI", rune(c)) ||
+			(sign == '+' && (c == 'k' || c == 'l'))
+		arg := ""
+		if takesArg && ai < len(args) {
+			arg = args[ai]
+			ai++
+		}
+		prefix, tracked := modePrefix[c]
+		if !tracked || arg == "" {
+			continue
+		}
+		ms := a.members[memberKey(server, channel)]
+		if ms == nil {
+			continue
+		}
+		cur, ok := ms.nicks[arg]
+		if sign == '+' {
+			// Grant: only upgrade (never demote @ to +).
+			if !ok || prefixRank(prefix) < prefixRank(cur) {
+				ms.nicks[arg] = prefix
+			}
+		} else if ok && cur == prefix {
+			ms.nicks[arg] = ""
+		}
+	}
+}
+
 // handleNames processes RPL_NAMREPLY (353): ":srv 353 me = #chan :@a +b c".
 func (a *App) handleNames(server, trailing string, params []string) {
 	ch := ""

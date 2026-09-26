@@ -88,6 +88,10 @@ type App struct {
 
 	members map[string]*memberSet
 
+	// nicks tracks our current nick per server, starting from config and
+	// updated from 001 and NICK echoes (including "_" 433 fallbacks).
+	ownNicks map[string]string
+
 	// Image previews: fetched art by URL, and URLs currently fetching.
 	imgCache    map[string]string
 	imgInflight map[string]bool
@@ -117,6 +121,7 @@ func New(cfg *config.Config, st *store.Store, events <-chan irc.Event, clients m
 		cfg: cfg, st: st, events: events, clients: clients,
 		input:       ti,
 		members:     map[string]*memberSet{},
+		ownNicks:    map[string]string{},
 		imgCache:    map[string]string{},
 		imgInflight: map[string]bool{},
 	}
@@ -360,16 +365,65 @@ func (a *App) handleMessage(server string, m *irc.Message) tea.Cmd {
 		a.addLine(server, server, store.Line{At: at, Nick: nick, Text: "quit: " + m.Trailing(), Kind: store.KindQuit})
 		a.memberQuit(server, nick)
 		a.renderNicks()
+	case "KICK":
+		if len(m.Params) < 2 {
+			return nil
+		}
+		ch, target := m.Params[0], m.Params[1]
+		text := target + " was kicked by " + nick
+		if reason := m.Trailing(); reason != "" && reason != target {
+			text += " (" + reason + ")"
+		}
+		a.addLine(server, ch, store.Line{At: at, Nick: nick, Text: text, Kind: store.KindSystem})
+		if isChannel(ch) {
+			a.memberRemove(server, ch, target)
+			a.renderNicks()
+		}
+	case "MODE":
+		if len(m.Params) < 2 {
+			return nil
+		}
+		target, modes := m.Params[0], m.Params[1]
+		args := m.Params[2:]
+		text := nick + " set mode " + modes
+		if len(args) > 0 {
+			text += " " + strings.Join(args, " ")
+		}
+		buf := target
+		if isChannel(target) {
+			a.applyModePrefixes(server, target, modes, args)
+			a.renderNicks()
+		} else {
+			buf = server // our own user modes land in the server window
+		}
+		a.addLine(server, buf, store.Line{At: at, Nick: nick, Text: text, Kind: store.KindSystem})
+	case "INVITE":
+		ch := m.Trailing()
+		if ch == "" && len(m.Params) > 1 {
+			ch = m.Params[1]
+		}
+		if ch == "" {
+			return nil
+		}
+		a.addLine(server, server, store.Line{At: at, Nick: nick, Text: "invited you to " + ch + " — /join " + ch, Kind: store.KindSystem})
 	case "NICK":
 		newNick := m.Trailing()
 		a.addLine(server, server, store.Line{At: at, Nick: nick, Text: "is now known as " + newNick, Kind: store.KindSystem})
 		a.memberRename(server, nick, newNick)
+		if nick == a.ownNick(server) {
+			a.setOwnNick(server, newNick)
+		}
 		a.renderNicks()
 	default:
 		if isNumeric(m.Command) {
 			// Keep the welcome/MOTD numerics, skip the noise.
 			switch m.Command {
 			case "001", "002", "003", "004", "005", "372", "375", "376":
+				if m.Command == "001" && len(m.Params) > 0 {
+					// 001's target is the nick the server actually
+					// assigned, including any "_" 433 fallback.
+					a.setOwnNick(server, m.Params[0])
+				}
 				text := m.Trailing()
 				if text == "" && len(m.Params) > 1 {
 					text = strings.Join(m.Params[1:], " ")
@@ -896,12 +950,28 @@ func (a *App) sendInput(v string) tea.Cmd {
 }
 
 func (a *App) ownNick(server string) string {
+	if n := a.ownNicks[server]; n != "" {
+		return n
+	}
 	for _, s := range a.cfg.Servers {
 		if s.Name == server {
 			return s.Nick
 		}
 	}
 	return "me"
+}
+
+// setOwnNick records the nick the server actually assigned us: 001's target
+// parameter after registration (which reflects any "_" 433 fallback), or a
+// NICK echo confirming a /nick change.
+func (a *App) setOwnNick(server, nick string) {
+	if nick == "" {
+		return
+	}
+	if a.ownNicks == nil {
+		a.ownNicks = map[string]string{}
+	}
+	a.ownNicks[server] = nick
 }
 
 func (a *App) sendCommand(cl *irc.Client, buf *store.Buffer, v string) tea.Cmd {
@@ -930,6 +1000,21 @@ func (a *App) sendCommand(cl *irc.Client, buf *store.Buffer, v string) tea.Cmd {
 			a.renderSidebar()
 			a.renderChat()
 			return a.queueImageFetches(buf.Server, to, text)
+		}
+	case "/me":
+		// /me does an emote in the focused buffer (CTCP ACTION).
+		if len(parts) > 1 && buf.Name != buf.Server {
+			text := strings.Join(parts[1:], " ")
+			_ = cl.Send("PRIVMSG " + buf.Name + " :\x01ACTION " + text + "\x01")
+			a.addLine(buf.Server, buf.Name, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: text, Kind: store.KindAction})
+			a.renderChat()
+			return a.queueImageFetches(buf.Server, buf.Name, text)
+		}
+	case "/nick":
+		// The server confirms with a NICK echo (or 433 -> "_" fallback);
+		// either way the tracked nick updates when the reply arrives.
+		if len(parts) > 1 {
+			_ = cl.Send("NICK " + parts[1])
 		}
 	case "/ctcp":
 		// /ctcp <target> <command> [args] -> PRIVMSG target :\x01COMMAND args\x01

@@ -22,6 +22,10 @@ Split-view TUI, TLS connections, and first-class ZNC/bouncer support.
   lines (default 50, set `history_playback = 0` to disable) replay into a
   buffer when it is first opened
 - TLS, with `insecure_skip_verify` for self-signed certs
+- Auto-reconnect with backoff when the connection drops
+- Nick collision fallback: a `433` at connect retries as `nick_`
+- Kicks, mode changes, and channel invites are shown (op/voice changes
+  update the nick list live)
 
 ## Build
 
@@ -78,13 +82,14 @@ internal/version     release version (`-version`, CTCP VERSION replies)
 
 Quit with `/quit` (or `/q`) — `ctrl+c` no longer closes the app.
 
-Slash commands: `/join #chan`, `/part [#chan]`, `/msg nick text`,
-`/topic [new topic]`, `/ctcp nick command [args]`, `/quit` (or `/q`).
+Slash commands: `/join #chan`, `/part [#chan]`, `/msg nick text`, `/me text`,
+`/nick newnick`, `/topic [new topic]`, `/ctcp nick command [args]`,
+`/quit` (or `/q`).
 
 CTCP is supported: `/me`-style actions render inline, incoming queries
 (`VERSION`, `PING`, `TIME`, `FINGER`, `USERINFO`, `CLIENTINFO`) are answered
 automatically via NOTICE, and CTCP exchanges stay in the active buffer.
-`./ircgo -version` prints the release (currently v0.1.7).
+`./ircgo -version` prints the release (currently v0.1.8).
 
 A nick list appears on the right for channel buffers (ops first, then
 alphabetical), built from NAMES replies and JOIN/PART/QUIT/NICK updates.
