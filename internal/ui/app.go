@@ -549,7 +549,30 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.handleImageFetched(msg)
 		return a, nil
 	case tea.MouseMsg:
-		// A click dismisses the autocomplete popup.
+		// The autocomplete popup gets first dibs on the mouse: hovering a
+		// row selects it, clicking a row inserts it. The pane beneath the
+		// popup never sees these events.
+		if a.emojiAC != nil {
+			if row, ok := a.emojiAC.at(msg.X, msg.Y); ok {
+				switch {
+				case msg.Action == tea.MouseActionMotion && msg.Button == tea.MouseButtonNone:
+					if idx := a.emojiAC.matchAt(row); idx >= 0 {
+						a.emojiAC.sel = idx
+					}
+				case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft:
+					if idx := a.emojiAC.matchAt(row); idx >= 0 {
+						a.emojiAC.sel = idx
+						a.acceptEmojiAC()
+					} else {
+						a.emojiAC = nil
+					}
+				case msg.Action != tea.MouseActionMotion:
+					a.emojiAC = nil
+				}
+				return a, nil
+			}
+		}
+		// A click outside the popup dismisses it.
 		if msg.Action != tea.MouseActionMotion {
 			a.emojiAC = nil
 		}

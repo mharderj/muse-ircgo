@@ -27,6 +27,10 @@ type emojiComplete struct {
 	// around as the match list filters down with each keystroke.
 	boxRows int // visible rows (capped at maxACRows)
 	boxW    int // content width in cells (excludes border/padding)
+	// rect is the popup's last-drawn screen region, set by overlayEmojiAC
+	// so mouse events can be routed to the popup instead of the pane
+	// beneath it.
+	rectX, rectY, rectW, rectH int
 }
 
 // acContentW returns the widest ":name:" row for a match list, in cells.
@@ -221,6 +225,7 @@ func overlayEmojiAC(screen string, ac *emojiComplete, width, divX int) string {
 	if y0 < 0 {
 		y0 = 0
 	}
+	ac.rectX, ac.rectY, ac.rectW, ac.rectH = x0, y0, boxW, boxH
 	for i, bl := range boxLines {
 		if y0+i < 0 || y0+i >= len(scrLines) {
 			continue
@@ -230,3 +235,27 @@ func overlayEmojiAC(screen string, ac *emojiComplete, width, divX int) string {
 	return strings.Join(scrLines, "\n")
 }
 
+
+// at reports whether screen coordinates fall inside the popup. If so, it
+// returns the visible row index (0-based, -1 when on the border/frame).
+func (ac *emojiComplete) at(x, y int) (row int, ok bool) {
+	if x < ac.rectX || x >= ac.rectX+ac.rectW || y < ac.rectY || y >= ac.rectY+ac.rectH {
+		return -1, false
+	}
+	row = y - ac.rectY - 1 // skip the top border
+	if row < 0 || row >= ac.boxRows {
+		return -1, true
+	}
+	return row, true
+}
+
+// matchAt returns the match index for a visible popup row, or -1 when the
+// row is blank (fewer matches than box rows).
+func (ac *emojiComplete) matchAt(row int) int {
+	if row >= 0 {
+		if idx := ac.scroll + row; idx < len(ac.matches) {
+			return idx
+		}
+	}
+	return -1
+}

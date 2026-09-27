@@ -345,3 +345,52 @@ func TestACPopupAvoidsSidebarDivider(t *testing.T) {
 		t.Fatal("popup box not found just right of the divider")
 	}
 }
+
+// Hovering the popup selects the row under the mouse; the pane beneath
+// must not see the event.
+func TestACMouseHoverSelectsRow(t *testing.T) {
+	a := testApp()
+	a.input.SetValue(":o")
+	a.input.SetCursor(2)
+	a.refreshEmojiAC()
+	if a.emojiAC == nil {
+		t.Fatal("popup did not open for :o")
+	}
+	// Pretend the popup was drawn at (17, 10), 20x10.
+	a.emojiAC.rectX, a.emojiAC.rectY, a.emojiAC.rectW, a.emojiAC.rectH = 17, 10, 20, 10
+	a.emojiAC.sel = 0
+
+	// Hover row 2 (y = 10 + 1 border + 2).
+	m, _ := a.Update(tea.MouseMsg{X: 20, Y: 13, Action: tea.MouseActionMotion, Button: tea.MouseButtonNone})
+	a = m.(*App)
+	want := a.emojiAC.scroll + 2
+	if a.emojiAC.sel != want {
+		t.Fatalf("sel = %d; want %d after hover", a.emojiAC.sel, want)
+	}
+	if a.emojiTip != nil {
+		t.Fatal("emojiTip should not appear when hovering the popup")
+	}
+}
+
+// Clicking a popup row inserts it instead of just dismissing the popup.
+func TestACMouseClickInsertsRow(t *testing.T) {
+	a := testApp()
+	a.input.SetValue(":o")
+	a.input.SetCursor(2)
+	a.refreshEmojiAC()
+	if a.emojiAC == nil {
+		t.Fatal("popup did not open for :o")
+	}
+	a.emojiAC.rectX, a.emojiAC.rectY, a.emojiAC.rectW, a.emojiAC.rectH = 17, 10, 20, 10
+
+	// Click row 1.
+	m, _ := a.Update(tea.MouseMsg{X: 20, Y: 12, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	a = m.(*App)
+	if a.emojiAC != nil {
+		t.Fatal("popup should close after inserting")
+	}
+	got := a.input.Value()
+	if !strings.HasPrefix(got, ":") || !strings.HasSuffix(got, ": ") {
+		t.Fatalf("input = %q; want an inserted :shortcode: ", got)
+	}
+}
