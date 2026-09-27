@@ -499,9 +499,9 @@ func (a *App) Init() tea.Cmd {
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.QuitMsg:
-		// Remember the focused buffer for the next launch. This is the
-		// only disk write for last-buffer state: focus switches don't
-		// touch the disk.
+		// Remember the focused buffer for the next launch. Focus switches
+		// already persist it (see setFocus); this final write covers focus
+		// changes that bypass setFocus, e.g. a buffer removed under us.
 		a.saveLastBuffer()
 		return a, tea.Quit
 	case tea.WindowSizeMsg:
@@ -1933,24 +1933,28 @@ func (a *App) focusBuffer(i int) {
 		return
 	}
 	a.setFocus(i)
-	// A manual switch cancels any pending startup restore. The focused
-	// buffer is only written to disk on quit (see the QuitMsg case).
+	// A manual switch cancels any pending startup restore.
 	a.pendingFocus = lastFocus{}
 }
 
-// setFocus moves focus without side effects: no persistence, no restore
-// cancellation. The startup restore path uses it so the restored buffer
-// doesn't rewrite the very state being restored.
+// setFocus moves focus to buffer i, clearing its unread marker, and
+// persists it immediately. The startup restore path uses it too, so the
+// restored buffer doesn't rewrite the very state being restored — the
+// write is a harmless no-op there. Persisting on every switch (not just
+// on quit) means an unclean shutdown — closed terminal, kill, crash —
+// still restores the buffer that was actually focused.
 func (a *App) setFocus(i int) {
 	a.focus = i
 	a.bufs[i].Unread = 0
 	// Re-lay out, since the nick pane only appears for channel buffers.
 	a.resize()
+	a.saveLastBuffer()
 }
 
 // saveLastBuffer records the focused buffer in the config file so the next
-// launch can restore it. It runs once on quit; focus switches don't touch
-// the disk.
+// launch can restore it. It runs on every focus switch (via setFocus) and
+// once more on quit, so the on-disk value is always current even if the
+// process dies without a clean shutdown.
 func (a *App) saveLastBuffer() {
 	if a.ConfigPath == "" || a.focus < 0 || a.focus >= len(a.bufs) {
 		return

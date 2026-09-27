@@ -34,7 +34,7 @@ func focusNamed(t *testing.T, a *App, name string) {
 	t.Fatalf("no buffer %q", name)
 }
 
-func TestFocusSwitchDoesNotTouchConfig(t *testing.T) {
+func TestFocusSwitchPersistsImmediately(t *testing.T) {
 	p := writeQuitConfig(t)
 	a := kickTestApp()
 	a.ConfigPath = p
@@ -42,13 +42,51 @@ func TestFocusSwitchDoesNotTouchConfig(t *testing.T) {
 	a.addLine("srv", "#c", store.Line{Text: "hi"})
 	a.refreshBuffers()
 	focusNamed(t, a, "#c")
-	focusNamed(t, a, "srv")
-	data, err := os.ReadFile(p)
+	// The switch hits the disk at once: even without a clean quit, the
+	// next launch must restore #c.
+	cfg, err := config.Load(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "last_buffer") {
-		t.Fatal("config written before quit")
+	if len(cfg.LastBuffer) != 2 || cfg.LastBuffer[0] != "srv" || cfg.LastBuffer[1] != "#c" {
+		t.Fatalf("LastBuffer = %q, want [srv #c]", cfg.LastBuffer)
+	}
+}
+
+// TestUncleanShutdownRestoresFocusedBuffer replays the reported bug: the
+// app was closed on #linux without a clean quit (no QuitMsg, so the
+// quit-time write never ran) and came back on the wrong buffer. Because
+// focus persists on every switch, the on-disk state is already right.
+func TestUncleanShutdownRestoresFocusedBuffer(t *testing.T) {
+	p := writeQuitConfig(t)
+	a := kickTestApp()
+	a.ConfigPath = p
+	a.addLine("srv", "srv", store.Line{Text: "hi"})
+	a.addLine("srv", "#c", store.Line{Text: "hi"})
+	a.addLine("srv", "dave", store.Line{Text: "hi"})
+	a.refreshBuffers()
+	focusNamed(t, a, "#c")
+	// No QuitMsg: simulate the process dying here (closed terminal).
+	b := kickTestApp()
+	b.ConfigPath = p
+	bcfg, err := config.Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.cfg = bcfg
+	b.addLine("srv", "dave", store.Line{Text: "hi"})
+	b.refreshBuffers()
+	b.restoreLastFocus() // #c not present yet: remembered, not forced
+	if b.pendingFocus.name != "#c" {
+		t.Fatalf("pendingFocus = %+v, want #c", b.pendingFocus)
+	}
+	b.addLine("srv", "#c", store.Line{Text: "hi"})
+	b.refreshBuffers() // #c appears: pending restore fires
+	if b.pendingFocus.server != "" {
+		t.Fatal("pendingFocus not consumed")
+	}
+	if b.bufs[b.focus].Name != "#c" {
+		t.Fatalf("focused = %q, want #c", b.bufs[b.focus].Name)
 	}
 }
 
