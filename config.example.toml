@@ -2,10 +2,19 @@
 # Copy to ~/.config/ircclient/config.toml and edit.
 
 # Channel logging: every channel/query buffer is appended to one log file
-# under ~/.local/ircgo/logs/<server>/<channel>.log. When a buffer is first
-# opened, the last history_playback lines are replayed into it.
+# under <log_dir>/<server>/<channel>.log. When a buffer is first opened,
+# the last history_playback lines are replayed into it.
 # Set to 0 to disable playback (logging still continues).
 history_playback = 50
+
+# Logging is on by default. `logging = false` disables it entirely: no log
+# files are written, nothing is replayed, and DM buffers are not restored
+# from logs on startup.
+#logging = false
+
+# Where channel logs live. Defaults to ~/.local/ircgo/logs. "~" and
+# environment variables are expanded.
+#log_dir = "~/irc-logs"
 
 [ui]
 timestamp_format = "15:04"

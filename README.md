@@ -18,9 +18,11 @@ Split-view TUI, TLS connections, and first-class ZNC/bouncer support.
   (chafa-style), fetched in the background — works in any terminal
 - Clickable links: URLs render underlined; click one to open it in your browser
 - Channel logging: each channel/query buffer logs to one file under
-  `~/.local/ircgo/logs/<server>/<channel>.log`; the last `history_playback`
-  lines (default 50, set `history_playback = 0` to disable) replay into a
-  buffer when it is first opened
+  `<log_dir>/<server>/<channel>.log` (default `~/.local/ircgo/logs`); the
+  last `history_playback` lines (default 50, set `history_playback = 0`
+  to disable) replay into a buffer when it is first opened. Logging is
+  optional: `logging = false` turns it off entirely, and `log_dir`
+  points it at another directory (`~` and env vars are expanded)
 - Query (DM) buffers are restored from their logs at startup, so they show
   in the sidebar without waiting for a new message
 - Image previews regenerate when a buffer is reopened: art is never logged,

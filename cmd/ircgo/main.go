@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"ircgo/internal/config"
+	"ircgo/internal/history"
 	"ircgo/internal/irc"
 	"ircgo/internal/store"
 	"ircgo/internal/ui"
@@ -35,6 +36,14 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ircgo: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Channel logging defaults to ~/.local/ircgo/logs. `logging = false`
+	// disables it entirely; `log_dir` points it elsewhere.
+	if !cfg.LoggingOn() {
+		history.LogDir = ""
+	} else if dir := cfg.ExpandedLogDir(); dir != "" {
+		history.LogDir = dir
 	}
 
 	if *debug {

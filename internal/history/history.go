@@ -1,5 +1,8 @@
-// Package history logs channel buffers to ~/.local/ircgo/logs (one file per
+// Package history logs channel buffers to the log directory (one file per
 // channel) and plays back the tail of those logs when a buffer is created.
+// The directory defaults to ~/.local/ircgo/logs and can be overridden with
+// the log_dir config setting; setting history.LogDir to "" disables
+// logging, playback, and query-buffer restore entirely.
 package history
 
 import (

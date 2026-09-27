@@ -20,6 +20,16 @@ type Config struct {
 	// local channel log are replayed into a buffer when it is created.
 	HistoryPlayback PlaybackLines `toml:"history_playback"`
 
+	// Logging is the logging setting: nil (unset) or true enables channel
+	// logging; false disables it entirely — no log writes, no history
+	// playback, no query-buffer restore from logs.
+	Logging *bool `toml:"logging"`
+
+	// LogDir overrides the channel log directory
+	// (default ~/.local/ircgo/logs). "~" and environment variables are
+	// expanded.
+	LogDir string `toml:"log_dir"`
+
 	// LastBuffer is the buffer focused when the app last quit, as
 	// [server, buffer]. The app writes it on exit; it is read on startup
 	// to restore focus.
@@ -67,6 +77,31 @@ func (c *Config) HistoryLines() int {
 		return DefaultHistoryLines
 	}
 	return c.HistoryPlayback.Lines
+}
+
+// LoggingOn reports whether channel logging is enabled. Logging defaults
+// to on; only an explicit `logging = false` turns it off.
+func (c *Config) LoggingOn() bool {
+	return c.Logging == nil || *c.Logging
+}
+
+// ExpandedLogDir returns the configured log_dir with "~" and environment
+// variables expanded, or "" when log_dir is unset (the caller keeps the
+// default directory in that case).
+func (c *Config) ExpandedLogDir() string {
+	if c.LogDir == "" {
+		return ""
+	}
+	dir := os.ExpandEnv(c.LogDir)
+	if home, err := os.UserHomeDir(); err == nil {
+		switch {
+		case dir == "~":
+			dir = home
+		case strings.HasPrefix(dir, "~/"):
+			dir = filepath.Join(home, dir[2:])
+		}
+	}
+	return dir
 }
 
 // UIConfig holds cosmetic preferences.
