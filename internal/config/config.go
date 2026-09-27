@@ -199,13 +199,27 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// DefaultPath returns ~/.config/ircclient/config.toml.
+// DefaultPath returns the default config path: ~/.config/ircgo/config.toml.
+// For backwards compatibility, an existing config at the previous location
+// (~/.config/ircclient/config.toml) is used when the new one is absent.
 func DefaultPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "config.toml"
 	}
-	return filepath.Join(home, ".config", "ircclient", "config.toml")
+	next := filepath.Join(home, ".config", "ircgo", "config.toml")
+	if _, err := os.Stat(next); err == nil {
+		return next
+	}
+	if legacy := filepath.Join(home, ".config", "ircclient", "config.toml"); fileExists(legacy) {
+		return legacy
+	}
+	return next
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // tomlString quotes s as a TOML basic string.

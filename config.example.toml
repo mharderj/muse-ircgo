@@ -1,5 +1,6 @@
 # ircgo example configuration.
-# Copy to ~/.config/ircclient/config.toml and edit.
+# Copy to ~/.config/ircgo/config.toml and edit.
+# (An existing config at ~/.config/ircclient/config.toml is still honored.)
 
 # Channel logging: every channel/query buffer is appended to one log file
 # under <log_dir>/<server>/<channel>.log. When a buffer is first opened,

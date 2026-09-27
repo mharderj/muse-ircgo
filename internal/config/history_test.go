@@ -116,3 +116,42 @@ func TestLogDirAbsoluteUntouched(t *testing.T) {
 		t.Fatalf("ExpandedLogDir = %q, want untouched", cfg.ExpandedLogDir())
 	}
 }
+
+func TestDefaultPathPrefersIrcgo(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	next := filepath.Join(home, ".config", "ircgo", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(next), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(next, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := DefaultPath(); got != next {
+		t.Fatalf("DefaultPath = %q, want %q", got, next)
+	}
+}
+
+func TestDefaultPathFallsBackToLegacy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	legacy := filepath.Join(home, ".config", "ircclient", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := DefaultPath(); got != legacy {
+		t.Fatalf("DefaultPath = %q, want legacy %q", got, legacy)
+	}
+}
+
+func TestDefaultPathFreshInstallUsesIrcgo(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	want := filepath.Join(home, ".config", "ircgo", "config.toml")
+	if got := DefaultPath(); got != want {
+		t.Fatalf("DefaultPath = %q, want %q", got, want)
+	}
+}

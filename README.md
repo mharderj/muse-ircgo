@@ -68,8 +68,8 @@ go build -o ircgo ./cmd/ircgo
 ## Run
 
 ```sh
-mkdir -p ~/.config/ircclient
-cp config.example.toml ~/.config/ircclient/config.toml
+mkdir -p ~/.config/ircgo
+cp config.example.toml ~/.config/ircgo/config.toml
 # edit it: nicks, servers, bouncer credentials
 ./ircgo
 # or: ./ircgo -config /path/to/config.toml
@@ -81,7 +81,7 @@ redacted:
 
 ```sh
 ./ircgo -debug
-tail -f ~/.config/ircclient/debug.log
+tail -f ~/.config/ircgo/debug.log
 ```
 
 ## Layout
