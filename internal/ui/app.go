@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -18,6 +19,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"ircgo/internal/config"
+	"ircgo/internal/emoji"
 	"ircgo/internal/history"
 	"ircgo/internal/img"
 	"ircgo/internal/irc"
@@ -151,6 +153,10 @@ type App struct {
 	// hovered is the sidebar row under the mouse (-1 when the mouse isn't
 	// over a buffer), used for the hover close/recover affordances.
 	hovered int
+
+	// emojiTip is the :shortcode: preview popup under the mouse in the
+	// chat pane (nil when not hovering a known emoji).
+	emojiTip *emojiTip
 
 	// archived parks closed buffers under the "Archive" section header;
 	// hidden removes archived buffers from view entirely. Both are keyed
@@ -554,13 +560,28 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						a.hovered = i
 						a.renderSidebar()
 					}
-				} else if a.hovered != -1 {
-					a.hovered = -1
-					a.renderSidebar()
+					a.emojiTip = nil
+				} else {
+					if a.hovered != -1 {
+						a.hovered = -1
+						a.renderSidebar()
+					}
+					// Free motion over the chat pane previews the emoji
+					// under the cursor, if any.
+					if em, code, sc, ok := a.emojiAt(msg.X, msg.Y); ok {
+						tip := &emojiTip{x: sc + lipgloss.Width(em), y: msg.Y, emoji: em, shortcode: code}
+						if a.emojiTip == nil || *a.emojiTip != *tip {
+							a.emojiTip = tip
+						}
+					} else {
+						a.emojiTip = nil
+					}
 				}
 			}
 			return a, nil
 		}
+		// Any other mouse action dismisses the emoji preview popup.
+		a.emojiTip = nil
 		// The mouse wheel scrolls chat history when it's over the chat
 		// pane. Scrolling up unpins the pane from new lines so history
 		// stays put; reaching the bottom re-pins it.
@@ -645,6 +666,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.resetDrag()
 			a.renderSidebar()
 		}
+		// A keypress also dismisses the emoji preview popup.
+		a.emojiTip = nil
 		// alt+1..alt+9 jumps straight to the buffer in that sidebar
 		// position (top to bottom). Note: ctrl+digit would be the more
 		// familiar binding, but terminals don't transmit it in a form
@@ -1279,6 +1302,15 @@ type urlHit struct {
 	start, end int
 }
 
+// emojiTip is a hover preview for an emoji in the chat pane: screen
+// coordinates plus the emoji and the :shortcode: it came from (or maps
+// to, for emoji typed as raw Unicode).
+type emojiTip struct {
+	x, y      int
+	emoji     string
+	shortcode string
+}
+
 // visibleRows re-wraps the chat content exactly like the viewport, returning
 // the currently visible display rows.
 func (a *App) visibleRows() []drow {
@@ -1382,6 +1414,168 @@ func (a *App) linkAt(x, y int) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// emojiAt returns the emoji under a chat-pane position, its :shortcode:,
+// and the screen column of the emoji's first cell.
+func (a *App) emojiAt(x, y int) (em, code string, startCell int, ok bool) {
+	sw := a.cfg.UI.SidebarWidth
+	if sw < 16 {
+		sw = 16
+	}
+	x0 := sw + 1 // chat pane starts after the sidebar border
+	if x < x0 || x >= x0+a.chat.Width || a.chat.Width <= 0 {
+		return "", "", 0, false
+	}
+	top := 0
+	if a.topicVisible() {
+		top = topicBarHeight
+	}
+	d := y - top // display row within the viewport
+	rows := a.visibleRows()
+	if d < 0 || d >= len(rows) {
+		return "", "", 0, false
+	}
+	text := strings.TrimRight(stripANSI(rows[d].text), " ")
+	runes := []rune(text)
+	cell := x - x0
+	// Walk runes to the one covering cell (emoji are 2 cells wide).
+	w := 0
+	for i, r := range runes {
+		rw := lipgloss.Width(string(r))
+		if rw < 1 {
+			rw = 1
+		}
+		if cell < w+rw {
+			em, code, ok := emoji.At(runes, i)
+			if !ok {
+				return "", "", 0, false
+			}
+			return em, code, x0 + w, true
+		}
+		w += rw
+	}
+	return "", "", 0, false
+}
+
+// splitCells splits s into per-cell chunks: ANSI escapes ride along with
+// the rune they precede, and the second cell of a wide rune is an empty
+// continuation chunk. This lets the popup overlay splice by cell without
+// splitting escapes or wide runes mid-glyph.
+func splitCells(s string) []string {
+	var cells []string
+	var pending string // ANSI escapes awaiting a rune
+	i := 0
+	for i < len(s) {
+		if s[i] == '\x1b' {
+			j := i + 1
+			if j < len(s) && s[j] == '[' {
+				j++
+				for j < len(s) && !(s[j] >= '@' && s[j] <= '~') {
+					j++
+				}
+				if j < len(s) {
+					j++
+				}
+			} else if j < len(s) {
+				j += 2
+				if j > len(s) {
+					j = len(s)
+				}
+			}
+			pending += s[i:j]
+			i = j
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		w := lipgloss.Width(string(r))
+		if w < 1 {
+			w = 1
+		}
+		cell := pending + s[i:i+size]
+		pending = ""
+		cells = append(cells, cell)
+		for k := 1; k < w; k++ {
+			cells = append(cells, "") // wide-rune continuation
+		}
+		i += size
+	}
+	if pending != "" {
+		cells = append(cells, pending)
+	}
+	return cells
+}
+
+// spliceCells replaces the cells [x0, x0+repCells) of line with rep's
+// cells. Cuts that would split a wide rune swallow the orphaned half,
+// since the popup covers that glyph anyway.
+func spliceCells(line string, x0 int, rep string) string {
+	cells := splitCells(line)
+	repCells := splitCells(rep)
+	if x0 < 0 {
+		x0 = 0
+	}
+	for len(cells) < x0 {
+		cells = append(cells, " ")
+	}
+	if x0 > 0 && x0 < len(cells) && cells[x0] == "" {
+		x0--
+	}
+	x1 := x0 + len(repCells)
+	if x1 < len(cells) && cells[x1] == "" {
+		x1++
+	}
+	if x1 > len(cells) {
+		x1 = len(cells)
+	}
+	out := make([]string, 0, len(cells)+len(repCells))
+	out = append(out, cells[:x0]...)
+	out = append(out, repCells...)
+	out = append(out, cells[x1:]...)
+	return strings.Join(out, "")
+}
+
+// overlayEmojiTip draws the emoji preview popup onto the rendered screen,
+// anchored just past the hovered emoji and clamped inside the screen.
+func overlayEmojiTip(screen string, tip *emojiTip, width int) string {
+	content := tip.emoji + "  :" + tip.shortcode + ":"
+	contentW := lipgloss.Width(content)
+	boxW := contentW + 4 // border + padding
+	boxH := 3
+	lines := strings.Split(screen, "\n")
+	height := len(lines)
+	if boxW > width || boxH > height {
+		return screen
+	}
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		Padding(0, 1).
+		Render(content)
+	boxLines := strings.Split(box, "\n")
+	// Prefer right of the emoji, above the cursor row; flip when the
+	// screen edge is in the way.
+	x0 := tip.x + 1
+	if x0+boxW > width {
+		x0 = tip.x - boxW - 1
+	}
+	if x0 < 0 {
+		x0 = 0
+	}
+	y0 := tip.y - boxH
+	if y0 < 0 {
+		y0 = tip.y + 1
+	}
+	if y0+boxH > height {
+		y0 = height - boxH
+	}
+	for i, bl := range boxLines {
+		if y0+i < 0 || y0+i >= len(lines) {
+			continue
+		}
+		lines[y0+i] = spliceCells(lines[y0+i], x0, bl)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // openURL opens url in the desktop browser without blocking the UI.
@@ -1809,6 +2003,9 @@ func (a *App) renderChat() {
 		a.chat.SetContent("connecting…")
 		return
 	}
+	// Fresh content may move text under a hovering mouse, so drop any
+	// emoji preview rather than show it for the wrong glyph.
+	a.emojiTip = nil
 	if a.focus >= len(a.bufs) {
 		a.focus = 0
 	}
@@ -1862,14 +2059,14 @@ func (a *App) writeChatLine(b *strings.Builder, l store.Line) {
 		prefixW := tsW + 1 + 15
 		prefix := tsStyle.Render(ts) + " " +
 			nickStyle.Render(fmt.Sprintf("%-14s", l.Nick)) + " "
-		text := link.Style(irc.FormatText(l.Text), func(s string) string {
+		text := link.Style(irc.FormatText(emoji.Replace(l.Text)), func(s string) string {
 			return linkStyle.Render(s)
 		})
 		a.writeChatRow(b, prefix, prefixW, text)
 	case store.KindAction:
 		prefixW := tsW + 1
 		prefix := tsStyle.Render(ts) + " "
-		text := sysStyle.Render("* "+l.Nick+" ") + irc.FormatStyled(l.Text, sysStyle)
+		text := sysStyle.Render("* "+l.Nick+" ") + irc.FormatStyled(emoji.Replace(l.Text), sysStyle)
 		a.writeChatRow(b, prefix, prefixW, text)
 	case store.KindJoin, store.KindPart, store.KindQuit:
 		// Presence notices name who: "17:02 thadood joined #idlewhores".
@@ -2010,7 +2207,11 @@ func (a *App) View() string {
 		)
 	}
 	body := lipgloss.JoinVertical(lipgloss.Left, main, a.input.View())
-	return lipgloss.JoinVertical(lipgloss.Left, body, a.statusLine())
+	v := lipgloss.JoinVertical(lipgloss.Left, body, a.statusLine())
+	if a.emojiTip != nil {
+		v = overlayEmojiTip(v, a.emojiTip, a.width)
+	}
+	return v
 }
 
 // chatColumn stacks the topic panel above the chat viewport when the

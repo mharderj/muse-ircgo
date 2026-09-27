@@ -14,6 +14,7 @@ Split-view TUI, TLS connections, and first-class ZNC/bouncer support.
 - CTCP queries answered automatically (`VERSION`, `PING`, `TIME`, …)
 - ZNC/bouncer support with `server-time` backlog timestamps
 - mIRC formatting rendered inline (colors, bold, italic, underline)
+- `:shortcode:` emotes (from Discord bridges) render as emoji; hovering one previews its `:shortcode:`
 - Lossless event delivery: replay bursts apply backpressure instead of dropping messages
 - Channel topic panel pinned above the chat feed (`/topic [new topic]`)
 - Inline image previews: image URLs in chat render as half-block art
@@ -138,7 +139,7 @@ instead of echoing them as if they went out.
 CTCP is supported: `/me`-style actions render inline, incoming queries
 (`VERSION`, `PING`, `TIME`, `FINGER`, `USERINFO`, `CLIENTINFO`) are answered
 automatically via NOTICE, and CTCP exchanges stay in the active buffer.
-`./ircgo -version` prints the release (currently v0.3.3).
+`./ircgo -version` prints the release (currently v0.3.4).
 
 A nick list appears on the right for channel buffers (ops first, then
 alphabetical), built from NAMES replies and JOIN/PART/QUIT/NICK updates.
