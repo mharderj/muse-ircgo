@@ -2310,6 +2310,13 @@ func (a *App) sendCommand(cl *irc.Client, buf *store.Buffer, v string) tea.Cmd {
 		a.renderSidebar()
 		a.renderChat()
 		return addCmd
+	case "/version":
+		// Local echo of the client version; nothing is sent to the network.
+		addCmd := a.addLine(buf.Server, buf.Name, store.Line{At: time.Now(), Text: "ircgo v" + version.Version, Kind: store.KindSystem})
+		a.refreshBuffers()
+		a.renderSidebar()
+		a.renderChat()
+		return addCmd
 	case "/topic":
 		// /topic [new topic]: with text, set the channel topic;
 		// without, ask the server for it (replies with 332).

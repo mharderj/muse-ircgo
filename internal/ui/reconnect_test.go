@@ -8,6 +8,7 @@ import (
 	"ircgo/internal/config"
 	"ircgo/internal/irc"
 	"ircgo/internal/store"
+	"ircgo/internal/version"
 )
 
 // reconnectApp builds an app with a live (but never started) client for
@@ -71,5 +72,15 @@ func TestConnDownTracking(t *testing.T) {
 	a.handleEvent(irc.Event{Server: "srv", Kind: irc.KindConnected})
 	if a.anyConnDown() {
 		t.Fatal("anyConnDown = true after reconnect")
+	}
+}
+
+func TestVersionCommandEchoesLocally(t *testing.T) {
+	a, cl, buf := reconnectApp()
+	a.connUp["srv"] = true
+	a.sendCommand(cl, buf, "/version")
+	content := stripANSI(a.chatContent())
+	if !strings.Contains(content, "ircgo v"+version.Version) {
+		t.Fatalf("missing version echo:\\n%s", content)
 	}
 }

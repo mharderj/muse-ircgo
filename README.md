@@ -126,7 +126,7 @@ Quit with `/quit` (or `/q`) — `ctrl+c` no longer closes the app.
 
 Slash commands: `/join #chan`, `/part [#chan]`, `/msg nick text`, `/me text`,
 `/nick newnick`, `/topic [new topic]`, `/ctcp nick command [args]`,
-`/reconnect`, `/quit` (or `/q`).
+`/reconnect`, `/version` (local echo), `/quit` (or `/q`).
 
 Dropped connections retry automatically with exponential backoff (2s, 4s,
 8s… up to 5 minutes, with jitter), resetting after each healthy session.
