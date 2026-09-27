@@ -318,6 +318,23 @@ func TestHoverHighlightsRow(t *testing.T) {
 	}
 }
 
+// The focused row's highlight spans the full sidebar width, like a hovered
+// row, instead of ending at the buffer name.
+func TestFocusHighlightsFullRow(t *testing.T) {
+	a := archiveTestApp(t)
+	a.focus = bufIndex(a, "#c")
+	a.hovered = -1
+	for _, line := range strings.Split(sidebarText(a), "\n") {
+		if strings.Contains(line, "> #c") {
+			if got := len([]rune(line)); got != a.sidebarWidth() {
+				t.Fatalf("focused row width = %d, want %d (%q)", got, a.sidebarWidth(), line)
+			}
+			return
+		}
+	}
+	t.Fatal("focused row not found")
+}
+
 // Hovering the focused row must not strip its brighter reverse highlight.
 func TestHoverKeepsFocusHighlight(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI256)

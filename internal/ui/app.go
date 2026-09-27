@@ -1596,7 +1596,9 @@ func (a *App) sidebarRow(i int, buf *store.Buffer) string {
 		if hovered {
 			return a.hoverText(prefix, buf, rev, rev)
 		}
-		return rev.Render(text)
+		// Pad to the full width like a hovered row, so the highlight
+		// reads as one continuous row instead of ending at the text.
+		return rev.Render(a.padRow(text))
 	case hovered:
 		dim := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8")).
@@ -1609,6 +1611,17 @@ func (a *App) sidebarRow(i int, buf *store.Buffer) string {
 	default:
 		return text
 	}
+}
+
+// padRow pads s with spaces to the full sidebar width, so row highlights
+// (focus, hover) span the whole row instead of ending at the text.
+func (a *App) padRow(s string) string {
+	sw := a.sidebarWidth()
+	r := []rune(s)
+	for len(r) < sw {
+		r = append(r, ' ')
+	}
+	return string(r)
 }
 
 // hoverText renders a hovered sidebar row: the row style spans the full
