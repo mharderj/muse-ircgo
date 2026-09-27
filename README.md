@@ -149,7 +149,5 @@ It hides on narrow terminals.
 ## Roadmap
 
 - Reconnect with backoff
-- Scrollback-preserving scroll (pgup/pgdn without snap-to-bottom)
-- Scroll wheel: scroll chat history
 - SASL EXTERNAL (client certs)
 - Configurable keybinds and themes
