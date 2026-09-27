@@ -25,17 +25,19 @@ Split-view TUI, TLS connections, and first-class ZNC/bouncer support.
   in the sidebar without waiting for a new message
 - Image previews regenerate when a buffer is reopened: art is never logged,
   so URLs in the replayed history are re-fetched automatically
-- Sidebar ordering: server window, then channels, then a divider, then
+- Sidebar ordering: the server window is its section's header row — click it
+  to open the server buffer — then channels, then a divider, then
   query (DM) buffers underneath
 - Word wrap in the chat pane: long messages wrap with a hanging indent,
   ANSI-aware so colors survive the break; image art and long URLs are
   never split
 - The focused buffer is remembered in the config (`last_buffer`, written on
   quit) and restored on the next launch
-- Sidebar buffer management: hovering a buffer reveals a dim `x` that parks
-  it under `-- Archive --` (channels stay joined, nothing is parted);
-  archived rows also offer `+` to recover them to their grouping, while
-  their `x` removes them from view entirely. The archive section is pinned
+- Sidebar buffer management: hovering a buffer highlights its row and
+  reveals a dim `x` that parks it under `-- Archive --` (channels stay
+  joined, nothing is parted); archived rows also offer `+` to recover
+  them to their grouping, while their `x` removes them from view
+  entirely. The archive section is pinned
   to the bottom of the sidebar and only appears when something is parked,
   and new activity returns a parked or removed buffer to the sidebar on
   its own

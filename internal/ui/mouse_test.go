@@ -11,8 +11,8 @@ import (
 
 // Two servers, two buffers each. Sidebar rows:
 //
-//	0: srv1 header   1: srv1 (idx 0)   2: #a (idx 1)
-//	3: separator     4: srv2 header    5: srv2 (idx 2)   6: #b (idx 3)
+//	0: srv1 (idx 0)   1: #a (idx 1)
+//	2: separator      3: srv2 (idx 2)   4: #b (idx 3)
 func testClickApp() *App {
 	a := New(&config.Config{}, store.New(), nil, nil)
 	a.addLine("srv1", "srv1", store.Line{Text: "hi"})
@@ -34,23 +34,28 @@ func click(a *App, x, y int) *App {
 
 func TestSidebarClickSwitchesBuffer(t *testing.T) {
 	a := testClickApp()
-	a = click(a, 2, 6) // #b on srv2
+	a = click(a, 2, 4) // #b on srv2
 	if a.focus != 3 {
 		t.Fatalf("focus = %d, want 3", a.focus)
 	}
-	a = click(a, 2, 2) // #a on srv1
+	a = click(a, 2, 1) // #a on srv1
 	if a.focus != 1 {
 		t.Fatalf("focus = %d, want 1", a.focus)
+	}
+	// The server window is its section's header row: clicking it shows
+	// the server buffer.
+	a = click(a, 2, 3) // srv2 header row
+	if a.focus != 2 {
+		t.Fatalf("focus = %d, want 2 (srv2 server window)", a.focus)
 	}
 }
 
 func TestSidebarClickIgnoresNonBuffers(t *testing.T) {
 	a := testClickApp()
 	for _, xy := range [][2]int{
-		{2, 0},  // server header
-		{2, 3},  // separator between servers
+		{2, 2},  // separator between servers
 		{2, 20}, // blank space below the list
-		{40, 6}, // chat area, outside the sidebar
+		{40, 4}, // chat area, outside the sidebar
 	} {
 		a = click(a, xy[0], xy[1])
 		if a.focus != 0 {

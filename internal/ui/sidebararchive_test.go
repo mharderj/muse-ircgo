@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"ircgo/internal/store"
 )
@@ -163,8 +165,8 @@ func TestHoverShowsAffordances(t *testing.T) {
 
 func TestMouseMotionTracksHover(t *testing.T) {
 	a := archiveTestApp(t)
-	// Row 4 is amy (0 header, 1 srv, 2 #c, 3 Messages divider).
-	_, _ = a.Update(tea.MouseMsg{X: 5, Y: 4, Action: tea.MouseActionMotion})
+	// Row 3 is amy (0 srv, 1 #c, 2 Messages divider).
+	_, _ = a.Update(tea.MouseMsg{X: 5, Y: 3, Action: tea.MouseActionMotion})
 	if a.hovered != bufIndex(a, "amy") {
 		t.Fatalf("hovered = %d, want amy", a.hovered)
 	}
@@ -178,8 +180,8 @@ func TestMouseMotionTracksHover(t *testing.T) {
 func TestClickXParksViaMouse(t *testing.T) {
 	a := archiveTestApp(t)
 	sw := a.sidebarWidth() // x affordance lives at sw-2
-	_, _ = a.Update(tea.MouseMsg{X: 5, Y: 4, Action: tea.MouseActionMotion})
-	_, _ = a.Update(tea.MouseMsg{X: sw - 2, Y: 4, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
+	_, _ = a.Update(tea.MouseMsg{X: 5, Y: 3, Action: tea.MouseActionMotion})
+	_, _ = a.Update(tea.MouseMsg{X: sw - 2, Y: 3, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
 	if a.displayRank(a.bufs[bufIndex(a, "amy")]) != 3 {
 		t.Fatal("clicking x did not park amy")
 	}
@@ -258,9 +260,9 @@ func TestHoverReRendersSidebarWithCloseX(t *testing.T) {
 	if strings.Contains(before, "x") {
 		t.Fatalf("close affordance visible before any hover:\n%s", before)
 	}
-	// Buffers: rows are 0=server header, 1=server window, 2=channel,
-	// 3="-- Messages --" divider, 4=amy (PM), 5=bob (PM). Hover amy's row.
-	u, _ := a.Update(tea.MouseMsg{Action: tea.MouseActionMotion, X: 2, Y: 4})
+	// Buffers: rows are 0=server window, 1=channel,
+	// 2="-- Messages --" divider, 3=amy (PM), 4=bob (PM). Hover amy's row.
+	u, _ := a.Update(tea.MouseMsg{Action: tea.MouseActionMotion, X: 2, Y: 3})
 	a = u.(*App)
 	if a.hovered != 2 {
 		t.Fatalf("hovered = %d, want 2", a.hovered)
@@ -284,9 +286,9 @@ func TestHoverReRendersSidebarWithCloseX(t *testing.T) {
 // sends free mouse-motion events, so the close affordance stays reachable.
 func TestPressPinsHoverForCloseX(t *testing.T) {
 	a := archiveTestApp(t)
-	// Rows: 0=server header, 1=server window, 2=channel,
-	// 3="-- Messages --" divider, 4=amy (PM). Press amy's row.
-	u, _ := a.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 2, Y: 4})
+	// Rows: 0=server window, 1=channel,
+	// 2="-- Messages --" divider, 3=amy (PM). Press amy's row.
+	u, _ := a.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 2, Y: 3})
 	a = u.(*App)
 	if a.hovered != 2 {
 		t.Fatalf("hovered = %d, want 2 after press", a.hovered)
@@ -299,5 +301,39 @@ func TestPressPinsHoverForCloseX(t *testing.T) {
 	a = u.(*App)
 	if a.hovered != -1 {
 		t.Fatalf("hovered = %d, want -1 after pressing outside", a.hovered)
+	}
+}
+
+// Hovering a row highlights it across its full width, visibly distinct
+// from the focused row's reverse video.
+func TestHoverHighlightsRow(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+	a := archiveTestApp(t)
+	a.hovered = bufIndex(a, "amy")
+	a.renderSidebar()
+	view := a.sidebar.View()
+	if !strings.Contains(view, "\x1b[48;5;237m") {
+		t.Fatalf("hovered row missing hover highlight:\n%q", view)
+	}
+}
+
+// Hovering the focused row must not strip its brighter reverse highlight.
+func TestHoverKeepsFocusHighlight(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+	a := archiveTestApp(t)
+	a.focus = bufIndex(a, "amy")
+	a.hovered = a.focus
+	a.renderSidebar()
+	view := a.sidebar.View()
+	idx := strings.Index(view, "amy")
+	if idx < 0 {
+		t.Fatalf("amy row missing:\n%q", view)
+	}
+	// Walk back to the row start: it must carry reverse video.
+	start := strings.LastIndex(view[:idx], "\n") + 1
+	if !strings.Contains(view[start:idx], "\x1b[7m") {
+		t.Fatalf("focused+hovered row lost reverse highlight:\n%q", view[start:idx])
 	}
 }

@@ -75,16 +75,21 @@ func TestSidebarRendersDividerBetweenChannelsAndQueries(t *testing.T) {
 func TestSidebarDividerClickIsNoop(t *testing.T) {
 	a := sortTestApp()
 	a.refreshBuffers()
-	// Rows: 0 = server header, 1 = server window, 2 = #a, 3 = divider,
-	// 4 = belial.
-	if _, ok := a.sidebarBufferAt(2, 3); ok {
+	// Rows: 0 = server window (doubles as the header row), 1 = #a,
+	// 2 = divider, 3 = belial.
+	if _, ok := a.sidebarBufferAt(2, 2); ok {
 		t.Fatal("click on divider row selected a buffer")
 	}
-	i, ok := a.sidebarBufferAt(2, 4)
+	i, ok := a.sidebarBufferAt(2, 3)
 	if !ok {
 		t.Fatal("click on belial row selected nothing")
 	}
 	if a.bufs[i].Name != "belial" {
 		t.Fatalf("click selected %q, want belial", a.bufs[i].Name)
+	}
+	// The server window's header row selects the server buffer.
+	i, ok = a.sidebarBufferAt(2, 0)
+	if !ok || a.bufs[i].Name != "srv" {
+		t.Fatalf("click on server row -> (%d, %v), want srv", i, ok)
 	}
 }
