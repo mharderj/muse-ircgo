@@ -394,3 +394,62 @@ func TestACMouseClickInsertsRow(t *testing.T) {
 		t.Fatalf("input = %q; want an inserted :shortcode: ", got)
 	}
 }
+
+// Cycling the selection through every row (as mouse hover does) must not
+// move the borders. renderACBox derives the border width from contentW,
+// never from measuring the ANSI-wrapped rows.
+func TestACBoxBordersStableAcrossSelection(t *testing.T) {
+	a := testApp()
+	a.input.SetValue(":c")
+	a.input.SetCursor(2)
+	a.refreshEmojiAC()
+	if a.emojiAC == nil {
+		t.Fatal("popup did not open for :c")
+	}
+	fake := strings.Repeat("x\n", 30)
+	wantW := -1
+	for sel := 0; sel < len(a.emojiAC.matches); sel++ {
+		a.emojiAC.sel = sel
+		out := overlayEmojiAC(fake, a.emojiAC, 80, 16)
+		for _, ln := range strings.Split(out, "\n") {
+			cells := splitCells(ln)
+			if len(cells) <= 17 {
+				continue
+			}
+			// Popup is pinned at x=17. Find the closing border.
+			var closer string
+			switch cells[17] {
+			case "╭":
+				closer = "╮"
+			case "│":
+				closer = "│"
+			case "╰":
+				closer = "╯"
+			default:
+				continue
+			}
+			// For side rows, skip the opening │ to find the closing one.
+			start := 18
+			w := 1 // opening border
+			found := false
+			for k := start; k < len(cells); k++ {
+				w++
+				if cells[k] == closer {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("sel=%d: no closing border %q on line", sel, closer)
+			}
+			if wantW < 0 {
+				wantW = w
+			} else if w != wantW {
+				t.Fatalf("sel=%d: box line width %d; want %d", sel, w, wantW)
+			}
+		}
+	}
+	if wantW < 0 {
+		t.Fatal("popup box not found")
+	}
+}

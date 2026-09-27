@@ -194,9 +194,7 @@ func overlayEmojiAC(screen string, ac *emojiComplete, width, divX int) string {
 	if boxW > width || boxH > height || boxH < 3 {
 		return screen
 	}
-	// Pad rows by hand and highlight the selection after padding. The box
-	// gets no Width(): lipgloss v1.1.0 mismeasures ANSI-wrapped rows with
-	// wide emoji and wraps them mid-row.
+	// Pad rows by hand and highlight the selection after padding.
 	for i := range lines {
 		if pad := contentW - lipgloss.Width(lines[i]); pad > 0 {
 			lines[i] += strings.Repeat(" ", pad)
@@ -205,11 +203,10 @@ func overlayEmojiAC(screen string, ac *emojiComplete, width, divX int) string {
 			lines[i] = acSelStyle.Render(lines[i])
 		}
 	}
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("240")).
-		Padding(0, 1).
-		Render(strings.Join(lines, "\n"))
+	// Draw the box by hand: lipgloss v1.1.0 mismeasures ANSI-wrapped rows
+	// with wide emoji when computing border widths, so the top/bottom
+	// borders are built from the known content width instead of measured.
+	box := renderACBox(lines, contentW)
 	boxLines := strings.Split(box, "\n")
 	// The popup is pinned just right of the sidebar divider: a fixed spot
 	// above the input that never moves and never covers a divider.
@@ -258,4 +255,23 @@ func (ac *emojiComplete) matchAt(row int) int {
 		}
 	}
 	return -1
+}
+
+// renderACBox draws the autocomplete popup's rounded border by hand around
+// the already-padded lines. The border width comes from the known content
+// width, never from measuring the (ANSI-wrapped) rows, so the top, bottom,
+// and side borders always agree no matter which row is highlighted.
+func renderACBox(lines []string, contentW int) string {
+	bs := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	var sb strings.Builder
+	sb.WriteString(bs.Render("╭" + strings.Repeat("─", contentW+2) + "╮"))
+	for _, l := range lines {
+		sb.WriteString("\n")
+		sb.WriteString(bs.Render("│"))
+		sb.WriteString(" " + l + " ")
+		sb.WriteString(bs.Render("│"))
+	}
+	sb.WriteString("\n")
+	sb.WriteString(bs.Render("╰" + strings.Repeat("─", contentW+2) + "╯"))
+	return sb.String()
 }

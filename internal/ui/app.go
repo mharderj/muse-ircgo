@@ -1539,12 +1539,12 @@ func splitCells(s string) []string {
 			i = j
 			continue
 		}
-		r, size := utf8.DecodeRuneInString(s[i:])
-		w := lipgloss.Width(string(r))
+		cluster, size := nextCluster(s[i:])
+		w := lipgloss.Width(cluster)
 		if w < 1 {
 			w = 1
 		}
-		cell := pending + s[i:i+size]
+		cell := pending + cluster
 		pending = ""
 		cells = append(cells, cell)
 		for k := 1; k < w; k++ {
@@ -1556,6 +1556,51 @@ func splitCells(s string) []string {
 		cells = append(cells, pending)
 	}
 	return cells
+}
+
+// nextCluster extracts the next grapheme cluster from s: a base rune plus
+// any combining marks, variation selectors, ZWJ sequences, or regional
+// indicator pairs (flags). This keeps multi-codepoint emoji together so
+// width measurement matches what the terminal renders.
+func nextCluster(s string) (cluster string, size int) {
+	r, sz := utf8.DecodeRuneInString(s)
+	cluster = s[:sz]
+	size = sz
+
+	// Regional indicator pair (flag): two RIs form one 2-cell glyph.
+	if r >= 0x1F1E6 && r <= 0x1F1EFF {
+		if len(s) > size {
+			if r2, sz2 := utf8.DecodeRuneInString(s[size:]); r2 >= 0x1F1E6 && r2 <= 0x1F1EFF {
+				cluster = s[:size+sz2]
+				size += sz2
+			}
+		}
+		return cluster, size
+	}
+
+	// Consume combining marks, VS16, and ZWJ sequences.
+	for len(s) > size {
+		r2, sz2 := utf8.DecodeRuneInString(s[size:])
+		// Variation selector or combining mark: part of the cluster.
+		if r2 == 0xFE0F || r2 == 0xFE0E || (r2 >= 0x0300 && r2 <= 0x036F) {
+			cluster += s[size : size+sz2]
+			size += sz2
+			continue
+		}
+		// ZWJ: consume it and the following emoji.
+		if r2 == 0x200D {
+			cluster += s[size : size+sz2]
+			size += sz2
+			if len(s) > size {
+				_, sz3 := utf8.DecodeRuneInString(s[size:])
+				cluster += s[size : size+sz3]
+				size += sz3
+			}
+			continue
+		}
+		break
+	}
+	return cluster, size
 }
 
 // spliceCells replaces the cells [x0, x0+repCells) of line with rep's
