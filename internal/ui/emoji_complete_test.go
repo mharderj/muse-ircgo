@@ -254,11 +254,11 @@ func TestAutocompleteGeometryStableWhileTyping(t *testing.T) {
 	}
 	// The rendered box must keep the same line count too.
 	fake := strings.Repeat("x\n", 30)
-	first := overlayEmojiAC(fake, a.emojiAC, 2, 80)
+	first := overlayEmojiAC(fake, a.emojiAC, 2, 80, 16)
 	a.input.SetValue(":cla")
 	a.input.SetCursor(4)
 	a.refreshEmojiAC()
-	second := overlayEmojiAC(fake, a.emojiAC, 2, 80)
+	second := overlayEmojiAC(fake, a.emojiAC, 2, 80, 16)
 	if len(strings.Split(first, "\n")) != len(strings.Split(second, "\n")) {
 		t.Fatal("overlay line count changed while typing")
 	}
@@ -303,7 +303,7 @@ func TestACPopupBoxAlignsWithVS16Emoji(t *testing.T) {
 		t.Fatal("cloud not among matches for :clou")
 	}
 	fake := strings.Repeat("                                                  \n", 30)
-	out := overlayEmojiAC(fake, a.emojiAC, 2, 80)
+	out := overlayEmojiAC(fake, a.emojiAC, 2, 80, 16)
 	widths := map[int]bool{}
 	for _, l := range strings.Split(out, "\n") {
 		if strings.Contains(l, "╭") || strings.Contains(l, "│") || strings.Contains(l, "╰") {
@@ -314,5 +314,42 @@ func TestACPopupBoxAlignsWithVS16Emoji(t *testing.T) {
 	// every line carrying box content must agree.
 	if len(widths) != 1 {
 		t.Fatalf("box lines have inconsistent widths: %v", widths)
+	}
+}
+
+// The popup must not straddle the sidebar divider: anchored in the sidebar,
+// it shifts just right of the divider so the divider stays continuous.
+func TestACPopupAvoidsSidebarDivider(t *testing.T) {
+	a := testApp()
+	a.input.SetValue(":o")
+	a.input.SetCursor(2)
+	a.refreshEmojiAC()
+	if a.emojiAC == nil {
+		t.Fatal("popup did not open for :o")
+	}
+	// Fake 80x24 screen with a sidebar divider at column 16.
+	var sb strings.Builder
+	for y := 0; y < 24; y++ {
+		sb.WriteString(strings.Repeat(".", 16) + "│" + strings.Repeat(".", 63) + "\n")
+	}
+	fake := strings.TrimSuffix(sb.String(), "\n")
+
+	out := overlayEmojiAC(fake, a.emojiAC, 2, 80, 16)
+	lines := strings.Split(out, "\n")
+	foundBox := false
+	for i := len(lines) - 4 - a.emojiAC.boxRows; i < len(lines)-2; i++ {
+		if i < 0 || i >= len(lines) {
+			continue
+		}
+		cells := splitCells(lines[i])
+		if len(cells) > 17 && (cells[17] == "╭" || cells[17] == "│" || cells[17] == "╰") {
+			foundBox = true // popup starts just right of the divider
+		}
+		if len(cells) > 16 && cells[16] != "│" {
+			t.Fatalf("row %d: sidebar divider at col 16 covered (got %q)", i, cells[16])
+		}
+	}
+	if !foundBox {
+		t.Fatal("popup box not found just right of the divider")
 	}
 }

@@ -169,7 +169,7 @@ var acSelStyle = lipgloss.NewStyle().Reverse(true)
 // anchored at the ":" trigger's cell column just above the input line. It
 // splices over existing lines so the screen height — and mouse coordinates
 // — stay exactly as rendered.
-func overlayEmojiAC(screen string, ac *emojiComplete, anchorX, width int) string {
+func overlayEmojiAC(screen string, ac *emojiComplete, anchorX, width, divX int) string {
 	// The popup keeps its opening geometry: render boxRows rows even when
 	// fewer matches remain, padding the shortfall with blank rows so the
 	// borders never move while the popup is open.
@@ -213,6 +213,15 @@ func overlayEmojiAC(screen string, ac *emojiComplete, anchorX, width int) string
 	}
 	if x0 < 0 {
 		x0 = 0
+	}
+	// Don't straddle the sidebar divider: a popup anchored in the sidebar
+	// would otherwise cover the divider and make it look broken. Shift it
+	// just right of the divider so the divider stays continuous.
+	if x0 <= divX && x0+boxW > divX {
+		x0 = divX + 1
+		if x0+boxW > width {
+			x0 = width - boxW
+		}
 	}
 	inputIdx := height - 2 // input line sits above the status line
 	y0 := inputIdx - boxH

@@ -2242,7 +2242,7 @@ func (a *App) View() string {
 	}
 	if a.emojiAC != nil {
 		v = overlayEmojiAC(v, a.emojiAC,
-			acAnchorX(a.input.Prompt, a.input.Value(), a.emojiAC.anchor), a.width)
+			acAnchorX(a.input.Prompt, a.input.Value(), a.emojiAC.anchor), a.width, a.sidebarWidth())
 	}
 	return v
 }
