@@ -5,6 +5,7 @@ package emoji
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 
 	"ircgo/internal/link"
@@ -214,6 +215,27 @@ func init() {
 			byEmoji[e] = name
 		}
 	}
+}
+
+// Suggestion is one autocomplete match: the shortcode name and its emoji.
+type Suggestion struct {
+	Name  string
+	Emoji string
+}
+
+// Suggest returns the shortcodes starting with prefix (case-insensitive),
+// sorted by name. An empty prefix returns everything, so typing just ":"
+// opens the full list.
+func Suggest(prefix string) []Suggestion {
+	prefix = strings.ToLower(prefix)
+	var out []Suggestion
+	for name, e := range shortcodes {
+		if strings.HasPrefix(name, prefix) {
+			out = append(out, Suggestion{Name: name, Emoji: e})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 var shortcodeRe = regexp.MustCompile(`:([A-Za-z0-9_+\-]{2,}):`)

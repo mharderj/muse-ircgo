@@ -158,6 +158,10 @@ type App struct {
 	// chat pane (nil when not hovering a known emoji).
 	emojiTip *emojiTip
 
+	// emojiAC is the :shortcode: autocomplete popup for the input line
+	// (nil when closed).
+	emojiAC *emojiComplete
+
 	// archived parks closed buffers under the "Archive" section header;
 	// hidden removes archived buffers from view entirely. Both are keyed
 	// by memberKey(server, name) and are session-only. New activity in a
@@ -545,6 +549,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.handleImageFetched(msg)
 		return a, nil
 	case tea.MouseMsg:
+		// A click dismisses the autocomplete popup.
+		if msg.Action != tea.MouseActionMotion {
+			a.emojiAC = nil
+		}
 		// Mouse motion with the left button held is a sidebar drag; free
 		// motion tracks the hovered row for the close/recover affordances.
 		// All other mouse input is swallowed so clicks don't land in the
@@ -668,6 +676,26 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// A keypress also dismisses the emoji preview popup.
 		a.emojiTip = nil
+		// While the autocomplete popup is open it borrows the navigation
+		// keys: up/down move through suggestions, tab/enter inserts the
+		// selected one, esc closes the popup.
+		if a.emojiAC != nil {
+			switch msg.String() {
+			case "up":
+				a.emojiAC.move(-1)
+				return a, nil
+			case "down":
+				a.emojiAC.move(1)
+				return a, nil
+			case "enter", "tab":
+				a.acceptEmojiAC()
+				a.refreshEmojiAC()
+				return a, nil
+			case "esc":
+				a.emojiAC = nil
+				return a, nil
+			}
+		}
 		// alt+1..alt+9 jumps straight to the buffer in that sidebar
 		// position (top to bottom). Note: ctrl+digit would be the more
 		// familiar binding, but terminals don't transmit it in a form
@@ -712,6 +740,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	a.input, cmd = a.input.Update(msg)
+	a.refreshEmojiAC()
 	return a, cmd
 }
 
@@ -2211,6 +2240,10 @@ func (a *App) View() string {
 	if a.emojiTip != nil {
 		v = overlayEmojiTip(v, a.emojiTip, a.width)
 	}
+	if a.emojiAC != nil {
+		v = overlayEmojiAC(v, a.emojiAC,
+			acAnchorX(a.input.Prompt, a.input.Value(), a.emojiAC.anchor), a.width)
+	}
 	return v
 }
 
@@ -2328,6 +2361,8 @@ func (a *App) focusBuffer(i int) {
 	a.setFocus(i)
 	// A manual switch cancels any pending startup restore.
 	a.pendingFocus = lastFocus{}
+	// Switching buffers closes the autocomplete popup.
+	a.emojiAC = nil
 }
 
 // setFocus moves focus to buffer i, clearing its unread marker, and

@@ -15,6 +15,7 @@ Split-view TUI, TLS connections, and first-class ZNC/bouncer support.
 - ZNC/bouncer support with `server-time` backlog timestamps
 - mIRC formatting rendered inline (colors, bold, italic, underline)
 - `:shortcode:` emotes (from Discord bridges) render as emoji; hovering one previews its `:shortcode:`
+- typing `:con` in the input opens an autocomplete popup — up/down to pick, tab/enter to insert, esc to close
 - Lossless event delivery: replay bursts apply backpressure instead of dropping messages
 - Channel topic panel pinned above the chat feed (`/topic [new topic]`)
 - Inline image previews: image URLs in chat render as half-block art
