@@ -26,8 +26,8 @@ Split-view TUI, TLS connections, and first-class ZNC/bouncer support.
 - Image previews regenerate when a buffer is reopened: art is never logged,
   so URLs in the replayed history are re-fetched automatically
 - Sidebar ordering: the server window is its section's header row — click it
-  to open the server buffer — then channels, then a divider, then
-  query (DM) buffers underneath
+  to open the server buffer — then channels and query (DM) buffers indent
+  beneath it, with a divider between the two groups
 - Word wrap in the chat pane: long messages wrap with a hanging indent,
   ANSI-aware so colors survive the break; image art and long URLs are
   never split

@@ -1565,8 +1565,9 @@ func (a *App) dropDivider(label string, hot bool) string {
 }
 
 // sidebarRow renders one buffer line. The server window doubles as its
-// section's header row and renders bold. The hovered row (server windows
-// excepted) is highlighted across its full width and grows click
+// section's header row and renders bold; channels and PMs indent beneath
+// it, sketching the server -> buffers hierarchy. The hovered row (server
+// windows excepted) is highlighted across its full width and grows click
 // affordances on the right: x parks the buffer in the archive, and
 // archived rows also get + to recover them. The focused row keeps its
 // brighter reverse highlight even while hovered.
@@ -1575,8 +1576,13 @@ func (a *App) sidebarRow(i int, buf *store.Buffer) string {
 	if i == a.focus {
 		marker = "> "
 	}
+	indent := ""
+	if r := bufferRank(buf); r == 1 || r == 2 {
+		indent = "  "
+	}
+	prefix := indent + marker
 	hovered := i == a.hovered && !a.dragActive && bufferRank(buf) != 0
-	text := marker + buf.Name
+	text := prefix + buf.Name
 	if !hovered && buf.Unread > 0 && i != a.focus {
 		text += " *"
 	}
@@ -1588,14 +1594,14 @@ func (a *App) sidebarRow(i int, buf *store.Buffer) string {
 	case i == a.focus:
 		rev := lipgloss.NewStyle().Reverse(true)
 		if hovered {
-			return a.hoverText(marker, buf, rev, rev)
+			return a.hoverText(prefix, buf, rev, rev)
 		}
 		return rev.Render(text)
 	case hovered:
 		dim := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8")).
 			Background(lipgloss.Color("237"))
-		return a.hoverText(marker, buf, hoverStyle, dim)
+		return a.hoverText(prefix, buf, hoverStyle, dim)
 	case bufferRank(buf) == 0:
 		return lipgloss.NewStyle().Bold(true).Render(text)
 	case buf.Unread > 0:

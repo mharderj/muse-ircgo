@@ -337,3 +337,24 @@ func TestHoverKeepsFocusHighlight(t *testing.T) {
 		t.Fatalf("focused+hovered row lost reverse highlight:\n%q", view[start:idx])
 	}
 }
+
+// Channels and PMs indent under their server's header row, sketching the
+// server -> buffers hierarchy.
+func TestSidebarHierarchyIndent(t *testing.T) {
+	a := archiveTestApp(t)
+	a.focus = bufIndex(a, "#c")
+	lines := strings.Split(sidebarText(a), "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " ")
+	}
+	// Rows: 0 srv, 1 #c, 2 Messages, 3 amy, 4 bob.
+	if got := lines[0]; got != "  srv" {
+		t.Fatalf("server row = %q, want unindented", got)
+	}
+	if got := lines[1]; got != "  > #c" {
+		t.Fatalf("focused channel row = %q, want %q", got, "  > #c")
+	}
+	if got := lines[3]; !strings.HasPrefix(got, "    amy") {
+		t.Fatalf("PM row = %q, want indented", got)
+	}
+}
