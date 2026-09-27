@@ -31,7 +31,7 @@ name = "libera"
 host = "irc.libera.chat"
 port = 6697
 tls = true
-nick = "matt"
+nick = "nickname"
 channels = ["#linux", "#golang"]
 
 # ZNC bouncer. The PASS payload is assembled as "user/network:password".
@@ -41,8 +41,8 @@ host = "bouncer.example.com"
 port = 6697
 tls = true
 #insecure_skip_verify = true  # only for self-signed bouncer certs
-nick = "matt"
-username = "matt"
+nick = "nickname"
+username = "nickname"
 network = "libera"
 password = "hunter2"
 sasl = false
