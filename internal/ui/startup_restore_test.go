@@ -17,12 +17,12 @@ func bufNames(a *App) []string {
 	return out
 }
 
-// TestStartupRestoresChannelOverDMs simulates a full restart where the
+// TestRestartFocusesChannel simulates a full restart where the
 // previous session ended on a channel: DM buffers are restored from logs
 // on first layout, the server window appears on connect, and the channel
 // buffer appears on JOIN. The pending last-buffer restore must win over
 // the DM buffers that exist first.
-func TestStartupRestoresChannelOverDMs(t *testing.T) {
+func TestRestartFocusesChannel(t *testing.T) {
 	dir := t.TempDir()
 	// Seed DM logs so startup recreates them (like Dennis/belial).
 	seed := newRestoreApp(t, dir)

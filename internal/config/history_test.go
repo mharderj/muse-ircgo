@@ -56,68 +56,46 @@ func TestHistoryPlaybackBad(t *testing.T) {
 	}
 }
 
-func TestLoggingDefaultsOn(t *testing.T) {
-	cfg := loadTemp(t, "")
-	if !cfg.LoggingOn() {
-		t.Fatal("LoggingOn = false, want true (default)")
+func TestLoggingToggle(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{"", true},                   // default on
+		{"logging = true\n", true},   // explicit on
+		{"logging = false\n", false}, // off
+	} {
+		if got := loadTemp(t, tc.body).LoggingOn(); got != tc.want {
+			t.Errorf("config %q: LoggingOn = %v, want %v", tc.body, got, tc.want)
+		}
 	}
-	if cfg.ExpandedLogDir() != "" {
-		t.Fatalf("ExpandedLogDir = %q, want empty (default)", cfg.ExpandedLogDir())
-	}
-}
-
-func TestLoggingExplicitOn(t *testing.T) {
-	cfg := loadTemp(t, "logging = true\n")
-	if !cfg.LoggingOn() {
-		t.Fatal("LoggingOn = false, want true")
-	}
-}
-
-func TestLoggingOff(t *testing.T) {
-	cfg := loadTemp(t, "logging = false\n")
-	if cfg.LoggingOn() {
-		t.Fatal("LoggingOn = true, want false")
+	if got := loadTemp(t, "").ExpandedLogDir(); got != "" {
+		t.Errorf("default ExpandedLogDir = %q, want empty", got)
 	}
 }
 
-func TestLogDirTildeExpansion(t *testing.T) {
-	cfg := loadTemp(t, "log_dir = \"~/irc-logs\"\n")
+func TestLogDirExpansion(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Skip("no home dir")
 	}
-	if want := filepath.Join(home, "irc-logs"); cfg.ExpandedLogDir() != want {
-		t.Fatalf("ExpandedLogDir = %q, want %q", cfg.ExpandedLogDir(), want)
-	}
-}
-
-func TestLogDirBareTilde(t *testing.T) {
-	cfg := loadTemp(t, "log_dir = \"~\"\n")
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skip("no home dir")
-	}
-	if cfg.ExpandedLogDir() != home {
-		t.Fatalf("ExpandedLogDir = %q, want %q", cfg.ExpandedLogDir(), home)
-	}
-}
-
-func TestLogDirEnvExpansion(t *testing.T) {
 	t.Setenv("IRCGO_TEST_LOGS", "/tmp/ircgo-test-logs")
-	cfg := loadTemp(t, "log_dir = \"$IRCGO_TEST_LOGS\"\n")
-	if cfg.ExpandedLogDir() != "/tmp/ircgo-test-logs" {
-		t.Fatalf("ExpandedLogDir = %q, want env expansion", cfg.ExpandedLogDir())
+	for _, tc := range []struct {
+		body string
+		want string
+	}{
+		{`log_dir = "~/irc-logs"`, filepath.Join(home, "irc-logs")},
+		{`log_dir = "~"`, home},
+		{`log_dir = "$IRCGO_TEST_LOGS"`, "/tmp/ircgo-test-logs"},
+		{`log_dir = "/var/log/ircgo"`, "/var/log/ircgo"},
+	} {
+		if got := loadTemp(t, tc.body+"\n").ExpandedLogDir(); got != tc.want {
+			t.Errorf("config %q: ExpandedLogDir = %q, want %q", tc.body, got, tc.want)
+		}
 	}
 }
 
-func TestLogDirAbsoluteUntouched(t *testing.T) {
-	cfg := loadTemp(t, "log_dir = \"/var/log/ircgo\"\n")
-	if cfg.ExpandedLogDir() != "/var/log/ircgo" {
-		t.Fatalf("ExpandedLogDir = %q, want untouched", cfg.ExpandedLogDir())
-	}
-}
-
-func TestDefaultPathPrefersIrcgo(t *testing.T) {
+func TestDefaultPathNew(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	next := filepath.Join(home, ".config", "ircgo", "config.toml")
@@ -132,7 +110,7 @@ func TestDefaultPathPrefersIrcgo(t *testing.T) {
 	}
 }
 
-func TestDefaultPathFallsBackToLegacy(t *testing.T) {
+func TestDefaultPathLegacy(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	legacy := filepath.Join(home, ".config", "ircclient", "config.toml")
@@ -147,7 +125,7 @@ func TestDefaultPathFallsBackToLegacy(t *testing.T) {
 	}
 }
 
-func TestDefaultPathFreshInstallUsesIrcgo(t *testing.T) {
+func TestDefaultPathMissing(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	want := filepath.Join(home, ".config", "ircgo", "config.toml")

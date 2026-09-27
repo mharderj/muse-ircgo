@@ -34,7 +34,7 @@ func focusNamed(t *testing.T, a *App, name string) {
 	t.Fatalf("no buffer %q", name)
 }
 
-func TestFocusSwitchPersistsImmediately(t *testing.T) {
+func TestSwitchSavesFocus(t *testing.T) {
 	p := writeQuitConfig(t)
 	a := kickTestApp()
 	a.ConfigPath = p
@@ -42,8 +42,7 @@ func TestFocusSwitchPersistsImmediately(t *testing.T) {
 	a.addLine("srv", "#c", store.Line{Text: "hi"})
 	a.refreshBuffers()
 	focusNamed(t, a, "#c")
-	// The switch hits the disk at once: even without a clean quit, the
-	// next launch must restore #c.
+	// Saved at switch time: no quit needed.
 	cfg, err := config.Load(p)
 	if err != nil {
 		t.Fatal(err)
@@ -53,11 +52,11 @@ func TestFocusSwitchPersistsImmediately(t *testing.T) {
 	}
 }
 
-// TestUncleanShutdownRestoresFocusedBuffer replays the reported bug: the
+// TestCrashRestoresFocus replays the reported bug: the
 // app was closed on #linux without a clean quit (no QuitMsg, so the
 // quit-time write never ran) and came back on the wrong buffer. Because
 // focus persists on every switch, the on-disk state is already right.
-func TestUncleanShutdownRestoresFocusedBuffer(t *testing.T) {
+func TestCrashRestoresFocus(t *testing.T) {
 	p := writeQuitConfig(t)
 	a := kickTestApp()
 	a.ConfigPath = p
@@ -90,7 +89,7 @@ func TestUncleanShutdownRestoresFocusedBuffer(t *testing.T) {
 	}
 }
 
-func TestQuitPersistsFocusedBuffer(t *testing.T) {
+func TestQuitSavesFocus(t *testing.T) {
 	p := writeQuitConfig(t)
 	a := kickTestApp()
 	a.ConfigPath = p
@@ -116,7 +115,7 @@ func TestQuitPersistsFocusedBuffer(t *testing.T) {
 	}
 }
 
-func TestRestoreLastFocusSelectsSavedBuffer(t *testing.T) {
+func TestRestorePicksSaved(t *testing.T) {
 	a := kickTestApp()
 	a.cfg.LastBuffer = []string{"srv", "#c"}
 	a.addLine("srv", "srv", store.Line{Text: "hi"})
@@ -131,10 +130,10 @@ func TestRestoreLastFocusSelectsSavedBuffer(t *testing.T) {
 	}
 }
 
-// TestRestoreLastFocusWaitsForChannel covers the startup race: channels
+// TestRestoreWaitsForJoin covers the startup race: channels
 // don't exist until JOIN creates them, so the restore waits and focuses
 // the buffer when it appears.
-func TestRestoreLastFocusWaitsForChannel(t *testing.T) {
+func TestRestoreWaitsForJoin(t *testing.T) {
 	a := kickTestApp()
 	a.cfg.LastBuffer = []string{"srv", "#c"}
 	a.addLine("srv", "srv", store.Line{Text: "hi"})
@@ -153,10 +152,10 @@ func TestRestoreLastFocusWaitsForChannel(t *testing.T) {
 	}
 }
 
-// TestManualSwitchCancelsPendingRestore: if the user switches buffers
+// TestSwitchCancelsPending: if the user switches buffers
 // before the remembered channel appears, the pending jump is dropped and
 // never yanks focus later.
-func TestManualSwitchCancelsPendingRestore(t *testing.T) {
+func TestSwitchCancelsPending(t *testing.T) {
 	a := kickTestApp()
 	a.cfg.LastBuffer = []string{"srv", "#c"}
 	a.addLine("srv", "srv", store.Line{Text: "hi"})
@@ -174,7 +173,7 @@ func TestManualSwitchCancelsPendingRestore(t *testing.T) {
 	}
 }
 
-func TestRestoreLastFocusIgnoresGarbage(t *testing.T) {
+func TestRestoreIgnoresGarbage(t *testing.T) {
 	for _, lb := range [][]string{nil, {}, {"only"}, {"", ""}, {"srv", "#gone"}} {
 		a := kickTestApp()
 		a.cfg.LastBuffer = lb
