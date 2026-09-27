@@ -145,3 +145,93 @@ func TestReconnectRetries(t *testing.T) {
 		t.Fatal("Run did not return after context cancellation")
 	}
 }
+
+// ReconnectNow must cut a long backoff short: with the initial delay set
+// high, the second dial attempt should still happen promptly after the
+// manual poke instead of after ~30s.
+func TestReconnectNowSkipsBackoff(t *testing.T) {
+	oldInit, oldMax, oldDial := reconnectInitial, reconnectMax, dialTimeout
+	reconnectInitial, reconnectMax, dialTimeout = 30*time.Second, time.Minute, 50*time.Millisecond
+	defer func() { reconnectInitial, reconnectMax, dialTimeout = oldInit, oldMax, oldDial }()
+
+	events := make(chan Event, 32)
+	c := New(config.Server{Name: "test", Host: "127.0.0.1", Port: 1}, events)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { c.Run(ctx); close(done) }()
+
+	// First event: the dial failure from the initial attempt.
+	select {
+	case <-events:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no dial failure from the initial attempt")
+	}
+	// Second event would be the "reconnecting in ..." notice; drain it.
+	select {
+	case <-events:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no reconnect notice after the dial failure")
+	}
+
+	c.ReconnectNow()
+
+	// The retry's dial failure must arrive quickly, not after 30s.
+	select {
+	case e := <-events:
+		if e.Kind != KindError {
+			t.Fatalf("event = %v, want KindError (retry dial failure)", e.Kind)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ReconnectNow did not trigger a prompt retry")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after context cancellation")
+	}
+}
+
+// ReconnectNow on a client that was never started must not block or panic:
+// the buffered channel absorbs the poke.
+func TestReconnectNowWithoutRun(t *testing.T) {
+	c := New(config.Server{Name: "test"}, make(chan Event, 1))
+	c.ReconnectNow()
+	c.ReconnectNow()
+}
+
+// Connected is false with no session, true once a registered session is
+// in place.
+func TestConnectedTracksSession(t *testing.T) {
+	c := New(config.Server{Name: "test", Nick: "bob"}, make(chan Event, 8))
+	if c.Connected() {
+		t.Fatal("Connected = true with no session")
+	}
+	clientEnd, serverEnd := net.Pipe()
+	defer clientEnd.Close()
+	defer serverEnd.Close()
+	c.conn = wrap(clientEnd)
+	if c.Connected() {
+		t.Fatal("Connected = true before registration (001)")
+	}
+	c.registered.Store(true)
+	if !c.Connected() {
+		t.Fatal("Connected = false with a registered session")
+	}
+}
+
+// withJitter must stay within 75%-125% of the backoff.
+func TestWithJitterBounds(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		got := withJitter(100 * time.Millisecond)
+		if got < 75*time.Millisecond || got > 125*time.Millisecond {
+			t.Fatalf("withJitter(100ms) = %v, want within [75ms, 125ms]", got)
+		}
+	}
+	if got := withJitter(0); got != 0 {
+		t.Fatalf("withJitter(0) = %v, want 0", got)
+	}
+}

@@ -126,12 +126,19 @@ Quit with `/quit` (or `/q`) — `ctrl+c` no longer closes the app.
 
 Slash commands: `/join #chan`, `/part [#chan]`, `/msg nick text`, `/me text`,
 `/nick newnick`, `/topic [new topic]`, `/ctcp nick command [args]`,
-`/quit` (or `/q`).
+`/reconnect`, `/quit` (or `/q`).
+
+Dropped connections retry automatically with exponential backoff (2s, 4s,
+8s… up to 5 minutes, with jitter), resetting after each healthy session.
+The status bar shows `reconnecting…` while any server is down, and
+`/reconnect` retries immediately instead of waiting out the delay.
+Messages typed while disconnected aren't sent — the client warns you
+instead of echoing them as if they went out.
 
 CTCP is supported: `/me`-style actions render inline, incoming queries
 (`VERSION`, `PING`, `TIME`, `FINGER`, `USERINFO`, `CLIENTINFO`) are answered
 automatically via NOTICE, and CTCP exchanges stay in the active buffer.
-`./ircgo -version` prints the release (currently v0.2.0).
+`./ircgo -version` prints the release (currently v0.3.0).
 
 A nick list appears on the right for channel buffers (ops first, then
 alphabetical), built from NAMES replies and JOIN/PART/QUIT/NICK updates.
@@ -148,6 +155,5 @@ It hides on narrow terminals.
 
 ## Roadmap
 
-- Reconnect with backoff
 - SASL EXTERNAL (client certs)
 - Configurable keybinds and themes

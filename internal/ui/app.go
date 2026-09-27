@@ -118,6 +118,11 @@ type App struct {
 	// updated from 001 and NICK echoes (including "_" 433 fallbacks).
 	ownNicks map[string]string
 
+	// connUp tracks per-server connection state from KindConnected /
+	// KindDisconnected events; the status bar shows a reconnecting
+	// indicator while any server is down.
+	connUp map[string]bool
+
 	// Image previews: fetched art by URL, URLs currently fetching, and the
 	// message-line slots waiting on each in-flight fetch.
 	imgCache    map[string]string
@@ -219,6 +224,7 @@ func New(cfg *config.Config, st *store.Store, events <-chan irc.Event, clients m
 		input:        ti,
 		members:      map[string]*memberSet{},
 		ownNicks:     map[string]string{},
+		connUp:       map[string]bool{},
 		imgCache:     map[string]string{},
 		imgInflight:  map[string]bool{},
 		imgPending:   map[string][]artSlot{},
@@ -692,8 +698,10 @@ func (a *App) handleEvent(ev irc.Event) tea.Cmd {
 	var cmd tea.Cmd
 	switch ev.Kind {
 	case irc.KindConnected:
+		a.connUp[ev.Server] = true
 		cmd = a.addLine(ev.Server, ev.Server, store.Line{At: time.Now(), Text: "connected", Kind: store.KindSystem})
 	case irc.KindDisconnected:
+		a.connUp[ev.Server] = false
 		cmd = a.addLine(ev.Server, ev.Server, store.Line{At: time.Now(), Text: "disconnected", Kind: store.KindSystem})
 	case irc.KindError:
 		cmd = a.addLine(ev.Server, ev.Server, store.Line{At: time.Now(), Text: "error: " + ev.Text, Kind: store.KindSystem})
@@ -2025,8 +2033,22 @@ func (a *App) statusLine() string {
 	if !a.chatPinned {
 		tail = "history — end: latest"
 	}
+	if a.anyConnDown() {
+		tail += "  •  reconnecting…"
+	}
 	return statusStyle.Width(a.width).
 		Render(fmt.Sprintf(" %s  •  tab: switch buffer  •  pgup/pgdn: history  •  %s ", focused, tail))
+}
+
+// anyConnDown reports whether any server has reported a disconnect that
+// hasn't been followed by a connect yet.
+func (a *App) anyConnDown() bool {
+	for _, up := range a.connUp {
+		if !up {
+			return true
+		}
+	}
+	return false
 }
 
 // sendInput routes the input line: slash commands or a PRIVMSG to the
@@ -2047,10 +2069,29 @@ func (a *App) sendInput(v string) tea.Cmd {
 	if target == buf.Server {
 		return nil // nowhere to send from the server window
 	}
+	if !a.requireConnected(cl, buf, target) {
+		return nil
+	}
 	_ = cl.Send("PRIVMSG " + target + " :" + v)
 	addCmd := a.addLine(buf.Server, target, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: v, Kind: store.KindChat})
 	a.renderChat()
 	return addCmd
+}
+
+// requireConnected warns in the target buffer when the server is down and
+// reports whether it's safe to send. Without this, a message typed during
+// a disconnect was echoed locally as if sent but never reached the
+// network. It trusts the client's live state or the UI's last-seen event
+// state (connUp), whichever says up.
+func (a *App) requireConnected(cl *irc.Client, buf *store.Buffer, target string) bool {
+	if cl.Connected() || a.connUp[buf.Server] {
+		return true
+	}
+	a.addLine(buf.Server, target, store.Line{At: time.Now(), Text: "not connected — message not sent (reconnecting…)", Kind: store.KindSystem})
+	a.refreshBuffers()
+	a.renderSidebar()
+	a.renderChat()
+	return false
 }
 
 func (a *App) ownNick(server string) string {
@@ -2213,6 +2254,9 @@ func (a *App) sendCommand(cl *irc.Client, buf *store.Buffer, v string) tea.Cmd {
 		if len(parts) > 2 {
 			to := parts[1]
 			text := strings.Join(parts[2:], " ")
+			if !a.requireConnected(cl, buf, to) {
+				return nil
+			}
 			_ = cl.Send("PRIVMSG " + to + " :" + text)
 			addCmd := a.addLine(buf.Server, to, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: text, Kind: store.KindChat})
 			a.refreshBuffers()
@@ -2223,6 +2267,9 @@ func (a *App) sendCommand(cl *irc.Client, buf *store.Buffer, v string) tea.Cmd {
 	case "/me":
 		// /me does an emote in the focused buffer (CTCP ACTION).
 		if len(parts) > 1 && buf.Name != buf.Server {
+			if !a.requireConnected(cl, buf, buf.Name) {
+				return nil
+			}
 			text := strings.Join(parts[1:], " ")
 			_ = cl.Send("PRIVMSG " + buf.Name + " :\x01ACTION " + text + "\x01")
 			addCmd := a.addLine(buf.Server, buf.Name, store.Line{At: time.Now(), Nick: a.ownNick(buf.Server), Text: text, Kind: store.KindAction})
@@ -2254,6 +2301,15 @@ func (a *App) sendCommand(cl *irc.Client, buf *store.Buffer, v string) tea.Cmd {
 		}
 	case "/quit", "/q":
 		return tea.Quit
+	case "/reconnect":
+		// Drop the session and retry now instead of waiting out the
+		// backoff. Works mid-backoff and on a live (wedged) connection.
+		cl.ReconnectNow()
+		addCmd := a.addLine(buf.Server, buf.Name, store.Line{At: time.Now(), Text: "reconnecting now…", Kind: store.KindSystem})
+		a.refreshBuffers()
+		a.renderSidebar()
+		a.renderChat()
+		return addCmd
 	case "/topic":
 		// /topic [new topic]: with text, set the channel topic;
 		// without, ask the server for it (replies with 332).

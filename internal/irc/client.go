@@ -3,7 +3,9 @@ package irc
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ircgo/internal/config"
@@ -66,13 +68,18 @@ type Client struct {
 	// nick at the start of every connection attempt.
 	nick string
 	// registered is set when 001 arrives; a healthy session resets the
-	// reconnect backoff.
-	registered bool
+	// reconnect backoff. Atomic because Connected is read from the UI
+	// goroutine while the Run goroutine writes it.
+	registered atomic.Bool
+	// reconnectCh wakes Run from its backoff sleep for a manual
+	// /reconnect. Buffered (size 1) so ReconnectNow never blocks; one
+	// pending retry is all that's needed.
+	reconnectCh chan struct{}
 }
 
 // New returns a client that publishes events to the channel.
 func New(cfg config.Server, events chan<- Event) *Client {
-	return &Client{cfg: cfg, events: events, capOffered: map[string]bool{}, nick: cfg.Nick}
+	return &Client{cfg: cfg, events: events, capOffered: map[string]bool{}, nick: cfg.Nick, reconnectCh: make(chan struct{}, 1)}
 }
 
 func (c *Client) emit(e Event) {
@@ -106,6 +113,40 @@ func (c *Client) Send(line string) error {
 	return c.conn.Send(line)
 }
 
+// ReconnectNow drops the current connection (if any) and prompts Run to
+// retry immediately instead of waiting out the backoff. Safe for
+// concurrent use (e.g. the UI's /reconnect command).
+func (c *Client) ReconnectNow() {
+	c.mu.Lock()
+	if c.conn != nil {
+		c.conn.Close()
+	}
+	c.mu.Unlock()
+	select {
+	case c.reconnectCh <- struct{}{}:
+	default:
+	}
+}
+
+// Connected reports whether the client currently holds a registered
+// session. The UI uses it to avoid silently dropping outgoing messages
+// typed while the connection is down.
+func (c *Client) Connected() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.conn != nil && c.registered.Load()
+}
+
+// withJitter spreads a backoff delay between 75% and 125% of d so a fleet
+// of clients doesn't retry in lockstep after a netsplit.
+func withJitter(d time.Duration) time.Duration {
+	q := int64(d) / 4
+	if q <= 0 {
+		return d
+	}
+	return time.Duration(3*q + rand.Int63n(2*q+1))
+}
+
 // Run connects, registers, and pumps messages, reconnecting with
 // exponential backoff until ctx is cancelled. A dropped connection used to
 // leave the UI looking alive while dead; now the UI sees "disconnected",
@@ -118,20 +159,30 @@ func (c *Client) Run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if c.registered {
+		if c.registered.Load() {
 			// The last session was healthy: start the backoff over so a
 			// flaky network doesn't wedge us at the maximum delay.
 			backoff = reconnectInitial
 		}
-		c.emit(Event{Kind: KindError, Text: fmt.Sprintf("reconnecting in %v", backoff)})
+		// A manual /reconnect skips the wait and retries immediately.
+		select {
+		case <-c.reconnectCh:
+			backoff = reconnectInitial
+			continue
+		default:
+		}
+		sleep := withJitter(backoff)
+		c.emit(Event{Kind: KindError, Text: fmt.Sprintf("reconnecting in %v", sleep.Round(time.Second))})
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(backoff):
-		}
-		backoff *= 2
-		if backoff > reconnectMax {
-			backoff = reconnectMax
+		case <-c.reconnectCh:
+			backoff = reconnectInitial
+		case <-time.After(sleep):
+			backoff *= 2
+			if backoff > reconnectMax {
+				backoff = reconnectMax
+			}
 		}
 	}
 }
@@ -140,7 +191,7 @@ func (c *Client) Run(ctx context.Context) {
 // messages until the connection drops or ctx is cancelled.
 func (c *Client) runOnce(ctx context.Context) {
 	c.nick = c.cfg.Nick // fresh attempt at the preferred nick
-	c.registered = false
+	c.registered.Store(false)
 	conn, err := Dial(c.cfg.Name, c.cfg.Host, c.port(), c.cfg.TLS, c.cfg.InsecureSkipVerify)
 	if err != nil {
 		c.emit(Event{Kind: KindError, Text: fmt.Sprintf("dial %s: %v", c.cfg.Addr(), err)})
@@ -230,7 +281,7 @@ func (c *Client) handle(m *Message) {
 		c.handleAuthenticate(m)
 		return
 	case "001": // welcome: registration complete
-		c.registered = true
+		c.registered.Store(true)
 		debugf(c.cfg.Name, "registered, joining %d channel(s)", len(c.cfg.Channels))
 		for _, ch := range c.cfg.Channels {
 			_ = c.Send("JOIN " + ch)

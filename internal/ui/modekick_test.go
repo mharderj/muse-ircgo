@@ -155,6 +155,7 @@ func TestOwnNickTrackedFrom001AndNick(t *testing.T) {
 
 func TestMeCommandSendsAction(t *testing.T) {
 	a := kickTestApp()
+	a.connUp["srv"] = true // simulate a seen connect; the client has no conn
 	a.st.Get("srv", "#c")
 	a.bufs = a.st.Buffers()
 	cl := irc.New(config.Server{Name: "srv", Nick: "me"}, nil) // no conn: Send error ignored
