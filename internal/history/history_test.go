@@ -110,3 +110,14 @@ func TestPathSanitizes(t *testing.T) {
 		t.Fatalf("Path not sanitized: %q", Path("a/b", ".."))
 	}
 }
+
+func TestLocalDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if want := filepath.Join(home, ".local", "ircgo"); LocalDir() != want {
+		t.Fatalf("LocalDir = %q, want %q", LocalDir(), want)
+	}
+	if want := filepath.Join(home, ".local", "ircgo", "logs"); defaultLogDir() != want {
+		t.Fatalf("defaultLogDir = %q, want %q", defaultLogDir(), want)
+	}
+}

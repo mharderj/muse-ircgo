@@ -19,12 +19,21 @@ import (
 // LogDir is the base directory for channel logs. Tests may override it.
 var LogDir = defaultLogDir()
 
-func defaultLogDir() string {
+// LocalDir returns ~/.local/ircgo, the root for ircgo's local data
+// (channel logs live in the logs subdirectory; debug.log sits here).
+func LocalDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".local", "ircgo", "logs")
+	return filepath.Join(home, ".local", "ircgo")
+}
+
+func defaultLogDir() string {
+	if dir := LocalDir(); dir != "" {
+		return filepath.Join(dir, "logs")
+	}
+	return ""
 }
 
 // safeName makes a server or channel name safe for use as a path element.

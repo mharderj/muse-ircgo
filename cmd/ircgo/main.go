@@ -47,7 +47,15 @@ func main() {
 	}
 
 	if *debug {
-		logPath := filepath.Join(filepath.Dir(*cfgPath), "debug.log")
+		logDir := history.LocalDir()
+		if logDir == "" {
+			logDir = filepath.Dir(*cfgPath)
+		}
+		if err := os.MkdirAll(logDir, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "ircgo: cannot create debug log dir: %v\n", err)
+			os.Exit(1)
+		}
+		logPath := filepath.Join(logDir, "debug.log")
 		f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ircgo: cannot open debug log: %v\n", err)

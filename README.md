@@ -81,7 +81,7 @@ redacted:
 
 ```sh
 ./ircgo -debug
-tail -f ~/.config/ircgo/debug.log
+tail -f ~/.local/ircgo/debug.log
 ```
 
 ## Layout
