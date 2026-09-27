@@ -4,6 +4,8 @@ Vibed to hell app, testing out MuseAI as a novice
 A terminal IRC client in Go, built on [Bubble Tea](https://github.com/charmbracelet/bubbletea).
 Split-view TUI, TLS connections, and first-class ZNC/bouncer support.
 
+![ircgo screenshot](docs/screenshot.png)
+
 ## Features
 
 - Split-view TUI: buffer sidebar, chat pane, input, status bar
