@@ -1568,9 +1568,9 @@ func nextCluster(s string) (cluster string, size int) {
 	size = sz
 
 	// Regional indicator pair (flag): two RIs form one 2-cell glyph.
-	if r >= 0x1F1E6 && r <= 0x1F1EFF {
+	if r >= 0x1F1E6 && r <= 0x1F1FF {
 		if len(s) > size {
-			if r2, sz2 := utf8.DecodeRuneInString(s[size:]); r2 >= 0x1F1E6 && r2 <= 0x1F1EFF {
+			if r2, sz2 := utf8.DecodeRuneInString(s[size:]); r2 >= 0x1F1E6 && r2 <= 0x1F1FF {
 				cluster = s[:size+sz2]
 				size += sz2
 			}
