@@ -229,3 +229,36 @@ func TestACAnchorX(t *testing.T) {
 		t.Fatalf("anchorX = %d; want 2", x)
 	}
 }
+
+// Typing more characters filters the match list, but the popup's geometry
+// must hold steady while it stays open — no border flapping.
+func TestAutocompleteGeometryStableWhileTyping(t *testing.T) {
+	a := testApp()
+	var rows, w int
+	for i, frag := range []string{":c", ":cl", ":cla"} {
+		a.input.SetValue(frag)
+		a.input.SetCursor(len([]rune(frag)))
+		a.refreshEmojiAC()
+		if a.emojiAC == nil {
+			t.Fatalf("popup closed for %q", frag)
+		}
+		if i == 0 {
+			rows, w = a.emojiAC.boxRows, a.emojiAC.boxW
+			continue
+		}
+		if a.emojiAC.boxRows != rows || a.emojiAC.boxW != w {
+			t.Fatalf("geometry changed typing %q: rows %d->%d, w %d->%d",
+				frag, rows, a.emojiAC.boxRows, w, a.emojiAC.boxW)
+		}
+	}
+	// The rendered box must keep the same line count too.
+	fake := strings.Repeat("x\n", 30)
+	first := overlayEmojiAC(fake, a.emojiAC, 2, 80)
+	a.input.SetValue(":cla")
+	a.input.SetCursor(4)
+	a.refreshEmojiAC()
+	second := overlayEmojiAC(fake, a.emojiAC, 2, 80)
+	if len(strings.Split(first, "\n")) != len(strings.Split(second, "\n")) {
+		t.Fatal("overlay line count changed while typing")
+	}
+}

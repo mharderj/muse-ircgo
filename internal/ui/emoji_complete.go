@@ -22,6 +22,22 @@ type emojiComplete struct {
 	matches []emoji.Suggestion
 	sel     int
 	scroll  int // first visible match index
+	// boxRows and boxW snapshot the popup's geometry when it opens and
+	// hold it steady while it stays open, so the borders don't flap
+	// around as the match list filters down with each keystroke.
+	boxRows int // visible rows (capped at maxACRows)
+	boxW    int // content width in cells (excludes border/padding)
+}
+
+// acContentW returns the widest ":name:" row for a match list, in cells.
+func acContentW(matches []emoji.Suggestion) int {
+	w := 0
+	for _, m := range matches {
+		if cw := lipgloss.Width(m.Emoji + " :" + m.Name + ":"); cw > w {
+			w = cw
+		}
+	}
+	return w
 }
 
 // acTriggerRe finds a ":" trigger at the end of the text before the cursor.
@@ -84,7 +100,30 @@ func (a *App) refreshEmojiAC() {
 		}
 		return
 	}
-	a.emojiAC = &emojiComplete{anchor: anchor, prefix: prefix, matches: matches}
+	if a.emojiAC != nil && a.emojiAC.anchor == anchor {
+		// Same trigger, new prefix: update in place so the popup's
+		// geometry holds steady. It may only grow (backspacing widens
+		// the match set), never shrink — no border flapping.
+		ac := a.emojiAC
+		ac.prefix = prefix
+		ac.matches = matches
+		ac.sel = 0
+		ac.scroll = 0
+		if w := acContentW(matches); w > ac.boxW {
+			ac.boxW = w
+		}
+		if r := min(len(matches), maxACRows); r > ac.boxRows {
+			ac.boxRows = r
+		}
+		return
+	}
+	a.emojiAC = &emojiComplete{
+		anchor:  anchor,
+		prefix:  prefix,
+		matches: matches,
+		boxRows: min(len(matches), maxACRows),
+		boxW:    acContentW(matches),
+	}
 }
 
 // acceptEmojiAC inserts the selected shortcode over the trigger fragment. A
@@ -122,20 +161,18 @@ var acSelStyle = lipgloss.NewStyle().Reverse(true)
 // splices over existing lines so the screen height — and mouse coordinates
 // — stay exactly as rendered.
 func overlayEmojiAC(screen string, ac *emojiComplete, anchorX, width int) string {
-	n := len(ac.matches)
-	rows := n
-	if rows > maxACRows {
-		rows = maxACRows
-	}
-	contentW := 0
+	// The popup keeps its opening geometry: render boxRows rows even when
+	// fewer matches remain, padding the shortfall with blank rows so the
+	// borders never move while the popup is open.
+	rows := ac.boxRows
+	contentW := ac.boxW
 	lines := make([]string, 0, rows)
-	for i := 0; i < rows; i++ {
+	for i := 0; i < rows && ac.scroll+i < len(ac.matches); i++ {
 		m := ac.matches[ac.scroll+i]
-		row := m.Emoji + " :" + m.Name + ":"
-		if w := lipgloss.Width(row); w > contentW {
-			contentW = w
-		}
-		lines = append(lines, row)
+		lines = append(lines, m.Emoji+" :"+m.Name+":")
+	}
+	for len(lines) < rows {
+		lines = append(lines, "")
 	}
 	boxW := contentW + 4 // border + padding
 	boxH := rows + 2
