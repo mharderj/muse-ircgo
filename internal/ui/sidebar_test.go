@@ -51,36 +51,42 @@ func TestSidebarRendersDividerBetweenChannelsAndQueries(t *testing.T) {
 	a.sidebar.Height = 20
 	a.renderSidebar()
 	view := a.sidebar.View()
-	if !strings.Contains(view, "-- Messages --") {
-		t.Fatalf("sidebar has no Messages divider:\n%s", view)
+	if !strings.Contains(view, "Messages") {
+		t.Fatalf("sidebar has no Messages section:\n%s", view)
 	}
-	// The divider sits between the channel row and the query row.
+	// Rows: 0 = server window, 1 = #a, 2 = rule, 3 = Messages header,
+	// 4 = belial. The rule and header sit between channel and query rows.
 	lines := strings.Split(view, "\n")
-	chanRow, divRow, queryRow := -1, -1, -1
+	chanRow, ruleRow, headRow, queryRow := -1, -1, -1, -1
 	for i, l := range lines {
 		switch {
 		case strings.Contains(l, "#a"):
 			chanRow = i
-		case strings.Contains(l, "-- Messages --"):
-			divRow = i
+		case strings.Contains(l, "─"):
+			ruleRow = i
+		case strings.Contains(l, "Messages"):
+			headRow = i
 		case strings.Contains(l, "belial"):
 			queryRow = i
 		}
 	}
-	if !(chanRow >= 0 && chanRow < divRow && divRow < queryRow) {
-		t.Fatalf("rows: channel=%d divider=%d query=%d, want channel < divider < query", chanRow, divRow, queryRow)
+	if !(chanRow >= 0 && chanRow < ruleRow && ruleRow < headRow && headRow < queryRow) {
+		t.Fatalf("rows: channel=%d rule=%d header=%d query=%d, want channel < rule < header < query", chanRow, ruleRow, headRow, queryRow)
 	}
 }
 
-func TestSidebarDividerClickIsNoop(t *testing.T) {
+func TestSidebarSectionRowsClickIsNoop(t *testing.T) {
 	a := sortTestApp()
 	a.refreshBuffers()
 	// Rows: 0 = server window (doubles as the header row), 1 = #a,
-	// 2 = divider, 3 = belial.
+	// 2 = rule, 3 = Messages header, 4 = belial.
 	if _, ok := a.sidebarBufferAt(2, 2); ok {
-		t.Fatal("click on divider row selected a buffer")
+		t.Fatal("click on rule row selected a buffer")
 	}
-	i, ok := a.sidebarBufferAt(2, 3)
+	if _, ok := a.sidebarBufferAt(2, 3); ok {
+		t.Fatal("click on Messages header row selected a buffer")
+	}
+	i, ok := a.sidebarBufferAt(2, 4)
 	if !ok {
 		t.Fatal("click on belial row selected nothing")
 	}

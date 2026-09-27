@@ -152,7 +152,7 @@ type App struct {
 	// over a buffer), used for the hover close/recover affordances.
 	hovered int
 
-	// archived parks closed buffers under the "-- Archive --" divider;
+	// archived parks closed buffers under the "Archive" section header;
 	// hidden removes archived buffers from view entirely. Both are keyed
 	// by memberKey(server, name) and are session-only. New activity in a
 	// parked or hidden buffer returns it to the sidebar.
@@ -188,8 +188,8 @@ type App struct {
 	dropRow     int
 
 	// dropRows maps sidebar content rows to drop zones, rebuilt by
-	// renderSidebar while a drag is active: the archive divider (park a
-	// buffer) and the recover hint (unpark into an empty group).
+	// renderSidebar while a drag is active: the archive section header
+	// (park a buffer) and the recover hint (unpark into an empty group).
 	dropRows map[int]dropTarget
 	// archivePad is the number of blank lines renderSidebar inserted
 	// above the bottom-pinned archive section; sidebarBufferAt walks the
@@ -1201,7 +1201,11 @@ func (a *App) sidebarBufferAt(x, y int) (i int, ok bool) {
 		rk := a.displayRank(buf)
 		if rk == 2 && lastRank < 2 {
 			if r == row {
-				return 0, false // "-- Messages --" divider line
+				return 0, false // section rule above "Messages"
+			}
+			r++
+			if r == row {
+				return 0, false // "Messages" header
 			}
 			r++
 		}
@@ -1228,20 +1232,16 @@ func (a *App) sidebarBufferAt(x, y int) (i int, ok bool) {
 			r++
 		}
 		if r == row {
-			return 0, false // "-- Archive --" divider line
+			return 0, false // section rule above "Archive"
 		}
 		r++
-		lastServer = ""
+		if r == row {
+			return 0, false // "Archive" header
+		}
+		r++
 		for idx, buf := range a.bufs {
 			if a.displayRank(buf) != 3 {
 				continue
-			}
-			if buf.Server != lastServer {
-				if r == row {
-					return 0, false // archive server label line
-				}
-				r++
-				lastServer = buf.Server
 			}
 			if r == row {
 				return idx, true
@@ -1408,8 +1408,8 @@ func bufferRank(b *store.Buffer) int {
 }
 
 // displayRank orders buffers within a server group: the server window,
-// then channels, then queries under "-- Messages --", then parked buffers
-// under "-- Archive --".
+// then channels, then queries under the "Messages" section, then parked
+// buffers under the "Archive" section.
 func (a *App) displayRank(b *store.Buffer) int {
 	if a.archived[memberKey(b.Server, b.Name)] {
 		return 3
@@ -1490,12 +1490,21 @@ func (a *App) refreshBuffers() {
 	}
 }
 
-// sidebarDivider renders a labeled dim divider: "-- Messages --" between a
-// server's channels and its query buffers, "-- Archive --" above parked
-// buffers. The archive divider only appears when parked buffers exist (or
-// as a drag drop target while a drag is active).
-func (a *App) sidebarDivider(label string) string {
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  -- " + label + " --")
+// sectionRule renders a full-width dim horizontal rule separating sidebar
+// sections ("Messages", "Archive") from the rows above them.
+// sectionHead renders a section header in the same position and style as a
+// server name: bold with the 2-space row marker prefix. It highlights while
+// it is the current drag drop target.
+func (a *App) sectionRule() string {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(strings.Repeat("─", a.sidebarWidth()))
+}
+
+func (a *App) sectionHead(label string, hot bool) string {
+	s := "  " + label
+	if hot {
+		return dropStyle.Render(s)
+	}
+	return lipgloss.NewStyle().Bold(true).Render(s)
 }
 
 func (a *App) renderSidebar() {
@@ -1527,7 +1536,8 @@ func (a *App) renderSidebar() {
 		}
 		r := a.displayRank(buf)
 		if r == 2 && lastRank < 2 {
-			emit(a.sidebarDivider("Messages"))
+			emit(a.sectionRule())
+			emit(a.sectionHead("Messages", false))
 		}
 		lastRank = r
 		emit(a.sidebarRow(i, buf))
@@ -1546,20 +1556,19 @@ func (a *App) renderSidebar() {
 		// rows to land on gets a landing spot above the archive.
 		if d != nil && dragArchived && !a.serverHasVisible(dragServer) {
 			archDrops = append(archDrops, archDrop{len(arch), dropTarget{server: dragServer, kind: "recover"}})
-			archEmit(a.dropDivider("drop to recover", a.dropKind == "recover"))
+			archEmit(a.sectionHead("drop to recover", a.dropKind == "recover"))
 		}
 		if d != nil && !dragArchived {
+			// Both the rule and the header are archive drop targets;
+			// the header highlights while either is hovered.
 			archDrops = append(archDrops, archDrop{len(arch), dropTarget{server: dragServer, kind: "archive"}})
+			archDrops = append(archDrops, archDrop{len(arch) + 1, dropTarget{server: dragServer, kind: "archive"}})
 		}
-		archEmit(a.dropDivider("Archive", d != nil && !dragArchived && a.dropKind == "archive"))
-		lastServer = ""
+		archEmit(a.sectionRule())
+		archEmit(a.sectionHead("Archive", d != nil && !dragArchived && a.dropKind == "archive"))
 		for i, buf := range a.bufs {
 			if a.displayRank(buf) != 3 {
 				continue
-			}
-			if buf.Server != lastServer {
-				archEmit(lipgloss.NewStyle().Bold(true).Render(buf.Server))
-				lastServer = buf.Server
 			}
 			archEmit(a.sidebarRow(i, buf))
 		}
@@ -1610,16 +1619,6 @@ func (a *App) serverHasVisible(server string) bool {
 		}
 	}
 	return false
-}
-
-// dropDivider renders a drop-zone divider, highlighted when it is the
-// current drop target.
-func (a *App) dropDivider(label string, hot bool) string {
-	s := "  -- " + label + " --"
-	if hot {
-		return dropStyle.Render(s)
-	}
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(s)
 }
 
 // sidebarRow renders one buffer line. The server window doubles as its

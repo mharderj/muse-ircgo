@@ -41,10 +41,26 @@ func bufIndex(a *App, name string) int {
 	return -1
 }
 
-func TestMessagesDividerLabeled(t *testing.T) {
+func TestMessagesSectionLayout(t *testing.T) {
 	a := archiveTestApp(t)
-	if got := sidebarText(a); !strings.Contains(got, "-- Messages --") {
-		t.Fatalf("missing labeled Messages divider:\n%s", got)
+	got := sidebarText(a)
+	// A rule line, then a "Messages" header in the server-name position
+	// (not the old "-- Messages --" divider).
+	if !strings.Contains(got, "Messages") {
+		t.Fatalf("missing Messages section header:\n%s", got)
+	}
+	if strings.Contains(got, "-- Messages --") {
+		t.Fatalf("old divider style lingered:\n%s", got)
+	}
+	lines := strings.Split(got, "\n")
+	headRow := -1
+	for i, l := range lines {
+		if strings.Contains(l, "Messages") {
+			headRow = i
+		}
+	}
+	if headRow < 1 || !strings.Contains(lines[headRow-1], "─") {
+		t.Fatalf("no rule directly above the Messages header:\n%s", got)
 	}
 }
 
@@ -62,8 +78,11 @@ func TestCloseParksInArchive(t *testing.T) {
 		t.Fatal("amy not parked at rank 3")
 	}
 	got := sidebarText(a)
-	if !strings.Contains(got, "-- Archive --") {
-		t.Fatalf("missing Archive divider:\n%s", got)
+	if !strings.Contains(got, "Archive") {
+		t.Fatalf("missing Archive section:\n%s", got)
+	}
+	if strings.Contains(got, "-- Archive --") {
+		t.Fatalf("old divider style lingered:\n%s", got)
 	}
 	// Parked buffer sorts after the main list.
 	if ai, bi := bufIndex(a, "amy"), bufIndex(a, "bob"); ai < bi {
@@ -165,8 +184,8 @@ func TestHoverShowsAffordances(t *testing.T) {
 
 func TestMouseMotionTracksHover(t *testing.T) {
 	a := archiveTestApp(t)
-	// Row 3 is amy (0 srv, 1 #c, 2 Messages divider).
-	_, _ = a.Update(tea.MouseMsg{X: 5, Y: 3, Action: tea.MouseActionMotion})
+	// Row 4 is amy (0 srv, 1 #c, 2 rule, 3 Messages).
+	_, _ = a.Update(tea.MouseMsg{X: 5, Y: 4, Action: tea.MouseActionMotion})
 	if a.hovered != bufIndex(a, "amy") {
 		t.Fatalf("hovered = %d, want amy", a.hovered)
 	}
@@ -180,8 +199,8 @@ func TestMouseMotionTracksHover(t *testing.T) {
 func TestClickXParksViaMouse(t *testing.T) {
 	a := archiveTestApp(t)
 	sw := a.sidebarWidth() // x affordance lives at sw-2
-	_, _ = a.Update(tea.MouseMsg{X: 5, Y: 3, Action: tea.MouseActionMotion})
-	_, _ = a.Update(tea.MouseMsg{X: sw - 2, Y: 3, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
+	_, _ = a.Update(tea.MouseMsg{X: 5, Y: 4, Action: tea.MouseActionMotion})
+	_, _ = a.Update(tea.MouseMsg{X: sw - 2, Y: 4, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
 	if a.displayRank(a.bufs[bufIndex(a, "amy")]) != 3 {
 		t.Fatal("clicking x did not park amy")
 	}
@@ -203,10 +222,10 @@ func TestClickRecoverViaMouse(t *testing.T) {
 func TestSidebarBufferAtArchiveRows(t *testing.T) {
 	a := archiveTestApp(t)
 	a.closeBuffer(bufIndex(a, "amy"))
-	divRow := sidebarRowWith(t, a, "-- Archive --")
+	divRow := sidebarRowWith(t, a, "Archive")
 	amyRow := sidebarRowWith(t, a, "amy")
 	if _, ok := a.sidebarBufferAt(5, divRow); ok {
-		t.Fatal("Archive divider row mapped to a buffer")
+		t.Fatal("Archive header row mapped to a buffer")
 	}
 	if i, ok := a.sidebarBufferAt(5, amyRow); !ok || a.bufs[i].Name != "amy" {
 		t.Fatalf("archive row -> (%d, %v), want amy", i, ok)
@@ -260,9 +279,9 @@ func TestHoverReRendersSidebarWithCloseX(t *testing.T) {
 	if strings.Contains(before, "x") {
 		t.Fatalf("close affordance visible before any hover:\n%s", before)
 	}
-	// Buffers: rows are 0=server window, 1=channel,
-	// 2="-- Messages --" divider, 3=amy (PM), 4=bob (PM). Hover amy's row.
-	u, _ := a.Update(tea.MouseMsg{Action: tea.MouseActionMotion, X: 2, Y: 3})
+	// Buffers: rows are 0=server window, 1=channel, 2=rule,
+	// 3=Messages header, 4=amy (PM), 5=bob (PM). Hover amy's row.
+	u, _ := a.Update(tea.MouseMsg{Action: tea.MouseActionMotion, X: 2, Y: 4})
 	a = u.(*App)
 	if a.hovered != 2 {
 		t.Fatalf("hovered = %d, want 2", a.hovered)
@@ -286,9 +305,9 @@ func TestHoverReRendersSidebarWithCloseX(t *testing.T) {
 // sends free mouse-motion events, so the close affordance stays reachable.
 func TestPressPinsHoverForCloseX(t *testing.T) {
 	a := archiveTestApp(t)
-	// Rows: 0=server window, 1=channel,
-	// 2="-- Messages --" divider, 3=amy (PM). Press amy's row.
-	u, _ := a.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 2, Y: 3})
+	// Rows: 0=server window, 1=channel, 2=rule,
+	// 3=Messages header, 4=amy (PM). Press amy's row.
+	u, _ := a.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 2, Y: 4})
 	a = u.(*App)
 	if a.hovered != 2 {
 		t.Fatalf("hovered = %d, want 2 after press", a.hovered)
@@ -364,14 +383,14 @@ func TestSidebarHierarchyIndent(t *testing.T) {
 	for i := range lines {
 		lines[i] = strings.TrimRight(lines[i], " ")
 	}
-	// Rows: 0 srv, 1 #c, 2 Messages, 3 amy, 4 bob.
+	// Rows: 0 srv, 1 #c, 2 rule, 3 Messages, 4 amy, 5 bob.
 	if got := lines[0]; got != "  srv" {
 		t.Fatalf("server row = %q, want unindented", got)
 	}
 	if got := lines[1]; got != "  > #c" {
 		t.Fatalf("focused channel row = %q, want %q", got, "  > #c")
 	}
-	if got := lines[3]; !strings.HasPrefix(got, "    amy") {
+	if got := lines[4]; !strings.HasPrefix(got, "    amy") {
 		t.Fatalf("PM row = %q, want indented", got)
 	}
 }

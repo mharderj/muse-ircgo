@@ -38,16 +38,16 @@ Split-view TUI, TLS connections, and first-class ZNC/bouncer support.
 - The focused buffer is remembered in the config (`last_buffer`, updated on
   every switch) and restored on the next launch
 - Sidebar buffer management: hovering a buffer highlights its row and
-  reveals a dim `x` that parks it under `-- Archive --` (channels stay
-  joined, nothing is parted); archived rows also offer `+` to recover
+  reveals a dim `x` that parks it under the **Archive** section (channels
+  stay joined, nothing is parted); archived rows also offer `+` to recover
   them to their grouping, while their `x` removes them from view
   entirely. The archive section is pinned
   to the bottom of the sidebar and only appears when something is parked,
   and new activity returns a parked or removed buffer to the sidebar on
   its own
 - Drag-to-reorder: drag a sidebar buffer within its group — channels stay
-  with channels, DMs stay under `-- Messages --`. Dragging a channel onto
-  the `-- Archive --` divider parks it and auto-sends `PART` (recovering
+  with channels, DMs stay under **Messages**. Dragging a channel onto
+  **Archive** parks it and auto-sends `PART` (recovering
   it re-sends `JOIN`); dragging a DM there just parks it. Your custom order
   is remembered in the config (`buffer_order`) and restored on the next
   launch
@@ -118,7 +118,7 @@ internal/version     release version (`-version`, CTCP VERSION replies)
 - `pgup` / `pgdn` — scroll chat history (the pane stays put while you read;
   `end` or scrolling back to the bottom follows new lines again)
 - mouse: left-click a buffer in the sidebar to switch to it; drag a buffer
-  to reorder it within its group, or drag it onto `-- Archive --` to park
+  to reorder it within its group, or drag it onto **Archive** to park
   it (channels auto-PART; drag back or click `+` to recover and re-JOIN);
   the mouse wheel scrolls the chat pane when it's over it
 
@@ -138,7 +138,7 @@ instead of echoing them as if they went out.
 CTCP is supported: `/me`-style actions render inline, incoming queries
 (`VERSION`, `PING`, `TIME`, `FINGER`, `USERINFO`, `CLIENTINFO`) are answered
 automatically via NOTICE, and CTCP exchanges stay in the active buffer.
-`./ircgo -version` prints the release (currently v0.3.1).
+`./ircgo -version` prints the release (currently v0.3.2).
 
 A nick list appears on the right for channel buffers (ops first, then
 alphabetical), built from NAMES replies and JOIN/PART/QUIT/NICK updates.

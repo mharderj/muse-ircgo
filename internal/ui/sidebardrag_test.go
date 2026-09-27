@@ -14,7 +14,7 @@ import (
 
 // dragTestApp builds a sidebar with a server window, two channels and two
 // PMs: bufs = [srv, #a, #b, amy, bob]. Rows: 0 srv, 1 #a, 2 #b,
-// 3 Messages, 4 amy, 5 bob.
+// 3 rule, 4 Messages, 5 amy, 6 bob.
 func dragTestApp(t *testing.T) *App {
 	t.Helper()
 	a := kickTestApp()
@@ -83,7 +83,7 @@ func TestDragReorderChannelsUp(t *testing.T) {
 
 func TestDragReorderPMs(t *testing.T) {
 	a := dragTestApp(t)
-	dragTo(a, 5, 4) // bob up onto amy
+	dragTo(a, 6, 5) // bob up onto amy
 	if got, want := strings.Join(bufOrder(a), ","), "srv,#a,#b,bob,amy"; got != want {
 		t.Fatalf("order = %s, want %s", got, want)
 	}
@@ -92,7 +92,7 @@ func TestDragReorderPMs(t *testing.T) {
 func TestDragRejectsCrossGroup(t *testing.T) {
 	a := dragTestApp(t)
 	before := strings.Join(bufOrder(a), ",")
-	dragTo(a, 1, 4) // #a onto amy (PM group): no-op
+	dragTo(a, 1, 5) // #a onto amy (PM group): no-op
 	if got := strings.Join(bufOrder(a), ","); got != before {
 		t.Fatalf("cross-group drag reordered: %s -> %s", before, got)
 	}
@@ -104,11 +104,11 @@ func TestDragRejectsCrossGroup(t *testing.T) {
 func TestDragToArchivePartsChannel(t *testing.T) {
 	a := dragTestApp(t)
 	dragPress(a, 5, 1)   // #a
-	dragMotion(a, 5, 10) // activate; archive divider appears at the bottom
+	dragMotion(a, 5, 10) // activate; archive section appears at the bottom
 	if !a.dragActive {
 		t.Fatal("drag did not activate")
 	}
-	divRow := sidebarRowWith(t, a, "-- Archive --")
+	divRow := sidebarRowWith(t, a, "Archive")
 	dragMotion(a, 5, divRow)
 	if a.dropKind != "archive" {
 		t.Fatalf("dropKind = %q over the archive divider, want archive", a.dropKind)
@@ -128,12 +128,12 @@ func TestDragToArchivePartsChannel(t *testing.T) {
 
 func TestDragPMToArchiveNoPart(t *testing.T) {
 	a := dragTestApp(t)
-	dragPress(a, 5, 4) // amy
+	dragPress(a, 5, 5) // amy
 	dragMotion(a, 5, 10)
 	if !a.dragActive {
 		t.Fatal("drag did not activate")
 	}
-	divRow := sidebarRowWith(t, a, "-- Archive --")
+	divRow := sidebarRowWith(t, a, "Archive")
 	dragMotion(a, 5, divRow)
 	dragRelease(a, 5, divRow)
 	key := memberKey("srv", "amy")
@@ -154,12 +154,12 @@ func TestDragRecoverFromArchive(t *testing.T) {
 	if !a.dragActive {
 		t.Fatal("drag did not activate")
 	}
-	// bob sits at row 4 now that amy is parked.
-	dragMotion(a, 5, 4)
+	// bob sits at row 5 now that amy is parked.
+	dragMotion(a, 5, 5)
 	if a.dropKind != "recover" {
 		t.Fatalf("dropKind = %q over a PM row, want recover", a.dropKind)
 	}
-	dragRelease(a, 5, 4)
+	dragRelease(a, 5, 5)
 	key := memberKey("srv", "amy")
 	if a.archived[key] {
 		t.Fatal("amy still archived after drag-recover")
@@ -194,8 +194,8 @@ func TestDragRecoverClearsPartedOnPark(t *testing.T) {
 func TestDragPlainClickStillFocuses(t *testing.T) {
 	a := dragTestApp(t)
 	amyIdx := bufIndex(a, "amy")
-	dragPress(a, 5, 4)
-	dragRelease(a, 5, 4) // no motion: plain click
+	dragPress(a, 5, 5)
+	dragRelease(a, 5, 5) // no motion: plain click
 	if a.dragActive {
 		t.Fatal("plain click activated a drag")
 	}
@@ -211,13 +211,13 @@ func TestDragAffordancePressNeverDrags(t *testing.T) {
 	a := dragTestApp(t)
 	sw := a.sidebarWidth()
 	// Hover amy so the x affordance exists, then press it and move.
-	a.Update(tea.MouseMsg{X: 5, Y: 4, Action: tea.MouseActionMotion, Button: tea.MouseButtonNone})
-	dragPress(a, sw-2, 4)
+	a.Update(tea.MouseMsg{X: 5, Y: 5, Action: tea.MouseActionMotion, Button: tea.MouseButtonNone})
+	dragPress(a, sw-2, 5)
 	dragMotion(a, sw-2, 12)
 	if a.dragActive {
 		t.Fatal("affordance press started a drag")
 	}
-	dragRelease(a, sw-2, 4)
+	dragRelease(a, sw-2, 5)
 	if !a.archived[memberKey("srv", "amy")] {
 		t.Fatal("x affordance click did not park amy")
 	}
@@ -225,7 +225,7 @@ func TestDragAffordancePressNeverDrags(t *testing.T) {
 
 func TestDragTracksBufferByKeyAcrossShift(t *testing.T) {
 	a := dragTestApp(t)
-	dragPress(a, 5, 4)  // amy
+	dragPress(a, 5, 5)  // amy
 	dragMotion(a, 5, 2) // activate
 	if !a.dragActive {
 		t.Fatal("drag did not activate")
@@ -235,7 +235,7 @@ func TestDragTracksBufferByKeyAcrossShift(t *testing.T) {
 	a.addLine("srv", "#z", store.Line{Text: "hi"})
 	a.refreshBuffers()
 	a.renderSidebar()
-	divRow := sidebarRowWith(t, a, "-- Archive --")
+	divRow := sidebarRowWith(t, a, "Archive")
 	dragMotion(a, 5, divRow)
 	// The motion re-resolved the dragged buffer by key after the shift.
 	if got := a.bufs[a.dragIdx].Name; got != "amy" {
