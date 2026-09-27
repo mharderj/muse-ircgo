@@ -108,6 +108,16 @@ func (c *Config) ExpandedLogDir() string {
 type UIConfig struct {
 	TimestampFormat string `toml:"timestamp_format"`
 	SidebarWidth    int    `toml:"sidebar_width"`
+	// CollapseJoins folds runs of consecutive join/part/quit lines into
+	// one summary row per event (e.g. "17:02–20:05 thadood joined
+	// #idlewhores (×28)"). Nil (unset) or true enables it; false shows
+	// every line.
+	CollapseJoins *bool `toml:"collapse_joins"`
+}
+
+// CollapseJoinsEnabled reports whether join/part/quit floods collapse.
+func (u UIConfig) CollapseJoinsEnabled() bool {
+	return u.CollapseJoins == nil || *u.CollapseJoins
 }
 
 // Server is a single IRC server or bouncer connection.

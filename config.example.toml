@@ -20,6 +20,10 @@ history_playback = 50
 [ui]
 timestamp_format = "15:04"
 sidebar_width = 26
+# Fold runs of consecutive join/part/quit lines into one summary row per
+# event, e.g. "17:02–20:05 thadood joined #idlewhores (×28)".
+# Default true; set false to show every line.
+collapse_joins = true
 
 # Direct TLS connection to Libera Chat.
 [[server]]

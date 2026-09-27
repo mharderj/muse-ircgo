@@ -133,6 +133,11 @@ type App struct {
 	// stripped, index-aligned with them, so clicks can be mapped to URLs.
 	chatContentRows []string
 
+	// chatPinned tracks whether the chat pane follows new lines. Scrolling
+	// up (mouse wheel, pgup) unpins it so history stays put; pgdn back to
+	// the bottom, end, or switching buffers re-pins it.
+	chatPinned bool
+
 	// pendingFocus is the buffer to focus once it appears, used by the
 	// startup restore: channels don't exist until JOIN creates them. A
 	// manual buffer switch clears it.
@@ -227,6 +232,7 @@ func New(cfg *config.Config, st *store.Store, events <-chan irc.Event, clients m
 		dropIdx:      -1,
 		dropRow:      -1,
 		dropRows:     map[int]dropTarget{},
+		chatPinned:   true,
 	}
 	a.loadBufferOrder()
 	return a
@@ -549,6 +555,24 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return a, nil
 		}
+		// The mouse wheel scrolls chat history when it's over the chat
+		// pane. Scrolling up unpins the pane from new lines so history
+		// stays put; reaching the bottom re-pins it.
+		if msg.Action == tea.MouseActionPress &&
+			(msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown) {
+			if a.chatAt(msg.X, msg.Y) {
+				if msg.Button == tea.MouseButtonWheelUp {
+					a.chatPinned = false
+				}
+				var cmd tea.Cmd
+				a.chat, cmd = a.chat.Update(msg)
+				if a.chat.AtBottom() {
+					a.chatPinned = true
+				}
+				return a, cmd
+			}
+			return a, nil
+		}
 		// A press over a sidebar row pins the hover state there and arms a
 		// potential drag. Terminals that don't report free mouse motion
 		// still send press/release, so this keeps the close affordance
@@ -632,6 +656,21 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(a.bufs) > 0 {
 				a.focusBuffer((a.focus + 1) % len(a.bufs))
 			}
+			return a, nil
+		case "pgup":
+			// Scrolling up unpins the chat pane from new lines.
+			a.chatPinned = false
+			a.chat.HalfViewUp()
+			return a, nil
+		case "pgdown":
+			a.chat.HalfViewDown()
+			if a.chat.AtBottom() {
+				a.chatPinned = true
+			}
+			return a, nil
+		case "end":
+			a.chatPinned = true
+			a.chat.GotoBottom()
 			return a, nil
 		case "enter":
 			v := strings.TrimSpace(a.input.Value())
@@ -1112,6 +1151,17 @@ func (a *App) sidebarWidth() int {
 		return sw
 	}
 	return 16
+}
+
+// chatAt reports whether screen coordinates fall inside the chat pane:
+// right of the sidebar border, below the topic panel when it's visible.
+func (a *App) chatAt(x, y int) bool {
+	sw := a.sidebarWidth()
+	top := 0
+	if a.topicVisible() {
+		top = topicBarHeight
+	}
+	return x > sw && x < sw+1+a.chat.Width && y >= top && y < top+a.chat.Height
 }
 
 func (a *App) sidebarBufferAt(x, y int) (i int, ok bool) {
@@ -1755,52 +1805,137 @@ func (a *App) renderChat() {
 	if a.focus >= len(a.bufs) {
 		a.focus = 0
 	}
-	buf := a.bufs[a.focus]
-	var b strings.Builder
-	for _, l := range buf.Lines() {
-		ts := l.At.Format(a.cfg.UI.TimestampFormat)
-		tsW := visibleWidth(ts)
-		switch l.Kind {
-		case store.KindChat:
-			// 14-wide nick column plus the two separating spaces.
-			prefixW := tsW + 1 + 15
-			prefix := tsStyle.Render(ts) + " " +
-				nickStyle.Render(fmt.Sprintf("%-14s", l.Nick)) + " "
-			text := link.Style(irc.FormatText(l.Text), func(s string) string {
-				return linkStyle.Render(s)
-			})
-			a.writeChatRow(&b, prefix, prefixW, text)
-		case store.KindAction:
-			prefixW := tsW + 1
-			prefix := tsStyle.Render(ts) + " "
-			text := sysStyle.Render("* "+l.Nick+" ") + irc.FormatStyled(l.Text, sysStyle)
-			a.writeChatRow(&b, prefix, prefixW, text)
-		default:
-			prefixW := tsW + 1
-			prefix := tsStyle.Render(ts) + " "
-			a.writeChatRow(&b, prefix, prefixW, sysStyle.Render(l.Text))
-		}
-		// Image previews live on their message line; render them directly
-		// underneath it. Art rows are pre-wrapped: never re-wrap them.
-		for _, art := range l.Art {
-			if art == "" {
-				continue
-			}
-			for _, row := range strings.Split(art, "\n") {
-				fmt.Fprintf(&b, "  %s\n", row)
-			}
-		}
+	content := a.chatContent()
+	// Follow new lines only while pinned; when the user has scrolled up
+	// into history the viewport keeps its offset (SetContent preserves it).
+	a.chat.SetContent(content)
+	if a.chatPinned {
+		a.chat.GotoBottom()
 	}
-	a.chat.SetContent(b.String())
-	a.chat.GotoBottom()
 	// Mirror the content lines without ANSI so linkAt can map clicks to
 	// URLs; the split matches viewport.SetContent exactly.
-	rows := strings.Split(b.String(), "\n")
+	rows := strings.Split(content, "\n")
 	plain := make([]string, len(rows))
 	for i, r := range rows {
 		plain[i] = stripANSI(r)
 	}
 	a.chatContentRows = plain
+}
+
+// chatContent builds the chat pane's text for the focused buffer,
+// collapsing runs of join/part/quit notices into summary rows.
+func (a *App) chatContent() string {
+	buf := a.bufs[a.focus]
+	var b strings.Builder
+	lines := buf.Lines()
+	for i := 0; i < len(lines); {
+		// Runs of consecutive join/part/quit notices collapse into one
+		// summary row per event, so a reconnect flood doesn't bury the
+		// conversation. A lone notice still renders on its own.
+		if a.cfg.UI.CollapseJoinsEnabled() {
+			if j := membershipRunEnd(lines, i); j-i >= 2 {
+				a.writeMembershipSummary(&b, lines[i:j])
+				i = j
+				continue
+			}
+		}
+		a.writeChatLine(&b, lines[i])
+		i++
+	}
+	return b.String()
+}
+
+// writeChatLine renders one scrollback line into the chat content.
+func (a *App) writeChatLine(b *strings.Builder, l store.Line) {
+	ts := l.At.Format(a.cfg.UI.TimestampFormat)
+	tsW := visibleWidth(ts)
+	switch l.Kind {
+	case store.KindChat:
+		// 14-wide nick column plus the two separating spaces.
+		prefixW := tsW + 1 + 15
+		prefix := tsStyle.Render(ts) + " " +
+			nickStyle.Render(fmt.Sprintf("%-14s", l.Nick)) + " "
+		text := link.Style(irc.FormatText(l.Text), func(s string) string {
+			return linkStyle.Render(s)
+		})
+		a.writeChatRow(b, prefix, prefixW, text)
+	case store.KindAction:
+		prefixW := tsW + 1
+		prefix := tsStyle.Render(ts) + " "
+		text := sysStyle.Render("* "+l.Nick+" ") + irc.FormatStyled(l.Text, sysStyle)
+		a.writeChatRow(b, prefix, prefixW, text)
+	case store.KindJoin, store.KindPart, store.KindQuit:
+		// Presence notices name who: "17:02 thadood joined #idlewhores".
+		prefixW := tsW + 1
+		prefix := tsStyle.Render(ts) + " "
+		a.writeChatRow(b, prefix, prefixW, sysStyle.Render(l.Nick+" "+l.Text))
+	default:
+		prefixW := tsW + 1
+		prefix := tsStyle.Render(ts) + " "
+		a.writeChatRow(b, prefix, prefixW, sysStyle.Render(l.Text))
+	}
+	// Image previews live on their message line; render them directly
+	// underneath it. Art rows are pre-wrapped: never re-wrap them.
+	for _, art := range l.Art {
+		if art == "" {
+			continue
+		}
+		for _, row := range strings.Split(art, "\n") {
+			fmt.Fprintf(b, "  %s\n", row)
+		}
+	}
+}
+
+// membershipRunEnd returns the end of the maximal run of consecutive
+// join/part/quit lines starting at i.
+func membershipRunEnd(lines []store.Line, i int) int {
+	j := i
+	for j < len(lines) {
+		switch lines[j].Kind {
+		case store.KindJoin, store.KindPart, store.KindQuit:
+			j++
+		default:
+			return j
+		}
+	}
+	return j
+}
+
+// writeMembershipSummary collapses a run of consecutive join/part/quit
+// lines into one summary row per distinct event, e.g.
+// "17:02–20:05 thadood joined #idlewhores (×28)". Events that happened
+// once render as ordinary lines.
+func (a *App) writeMembershipSummary(b *strings.Builder, run []store.Line) {
+	tf := a.cfg.UI.TimestampFormat
+	type mkey struct {
+		kind store.Kind
+		nick string
+		text string
+	}
+	var order []mkey
+	groups := make(map[mkey][]store.Line, len(run))
+	for _, l := range run {
+		k := mkey{l.Kind, l.Nick, l.Text}
+		if _, ok := groups[k]; !ok {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], l)
+	}
+	for _, k := range order {
+		ls := groups[k]
+		if len(ls) == 1 {
+			a.writeChatLine(b, ls[0])
+			continue
+		}
+		first, last := ls[0].At.Format(tf), ls[len(ls)-1].At.Format(tf)
+		ts := first
+		if last != first {
+			ts += "–" + last
+		}
+		prefix := tsStyle.Render(ts) + " "
+		text := fmt.Sprintf("%s %s (×%d)", k.nick, k.text, len(ls))
+		a.writeChatRow(b, prefix, visibleWidth(ts)+1, sysStyle.Render(text))
+	}
 }
 
 // writeChatRow writes one logical chat line as physical rows: prefix plus
@@ -1886,8 +2021,12 @@ func (a *App) statusLine() string {
 		b := a.bufs[a.focus]
 		focused = b.Server + "/" + b.Name
 	}
+	tail := "/q: quit"
+	if !a.chatPinned {
+		tail = "history — end: latest"
+	}
 	return statusStyle.Width(a.width).
-		Render(fmt.Sprintf(" %s  •  tab: switch buffer  •  /q: quit ", focused))
+		Render(fmt.Sprintf(" %s  •  tab: switch buffer  •  pgup/pgdn: history  •  %s ", focused, tail))
 }
 
 // sendInput routes the input line: slash commands or a PRIVMSG to the
@@ -1959,6 +2098,8 @@ func (a *App) focusBuffer(i int) {
 func (a *App) setFocus(i int) {
 	a.focus = i
 	a.bufs[i].Unread = 0
+	// A fresh buffer starts pinned to the latest lines.
+	a.chatPinned = true
 	// Re-lay out, since the nick pane only appears for channel buffers.
 	a.resize()
 	a.saveLastBuffer()

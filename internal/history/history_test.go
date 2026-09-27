@@ -27,9 +27,14 @@ func TestFormatParseRoundTrip(t *testing.T) {
 			"[2026-09-26 14:18:04] -ns- identify", store.KindNotice, "ns", "identify"},
 		{store.Line{At: at, Text: "connected", Kind: store.KindSystem},
 			"[2026-09-26 14:18:04] -- connected", store.KindSystem, "", "connected"},
-		// Joins/parts/quits log as system lines with the nick folded in.
+		// Joins/parts/quits keep their kind in the marker and round-trip
+		// exactly.
 		{store.Line{At: at, Nick: "bob", Text: "joined #a", Kind: store.KindJoin},
-			"[2026-09-26 14:18:04] -- bob joined #a", store.KindSystem, "", "bob joined #a"},
+			"[2026-09-26 14:18:04] --join bob joined #a", store.KindJoin, "bob", "joined #a"},
+		{store.Line{At: at, Nick: "bob", Text: "left #a", Kind: store.KindPart},
+			"[2026-09-26 14:18:04] --part bob left #a", store.KindPart, "bob", "left #a"},
+		{store.Line{At: at, Nick: "bob", Text: "quit: gone", Kind: store.KindQuit},
+			"[2026-09-26 14:18:04] --quit bob quit: gone", store.KindQuit, "bob", "quit: gone"},
 	}
 	for _, tc := range tests {
 		form, ok := FormatLine(tc.line)
@@ -42,6 +47,34 @@ func TestFormatParseRoundTrip(t *testing.T) {
 		}
 		if got.Kind != tc.kind || got.Nick != tc.nick || got.Text != tc.wantText || !got.At.Equal(tc.line.At) {
 			t.Fatalf("ParseLine(%q) = %+v; want kind=%d nick=%q text=%q", form, got, tc.kind, tc.nick, tc.wantText)
+		}
+	}
+}
+
+func TestParseLegacyMembershipLines(t *testing.T) {
+	// Lines written before the log gained kind markers ("-- nick joined
+	// #a") are recognized by their text; other "--" lines stay system
+	// lines with the text untouched.
+	tests := []struct {
+		raw      string
+		kind     store.Kind
+		nick     string
+		wantText string
+	}{
+		{"[2026-09-26 14:18:04] -- bob joined #a", store.KindJoin, "bob", "joined #a"},
+		{"[2026-09-26 14:18:04] -- bob left #a", store.KindPart, "bob", "left #a"},
+		{"[2026-09-26 14:18:04] -- bob quit: gone", store.KindQuit, "bob", "quit: gone"},
+		{"[2026-09-26 14:18:04] -- connected", store.KindSystem, "", "connected"},
+		{"[2026-09-26 14:18:04] -- bob is now known as robert", store.KindSystem, "", "bob is now known as robert"},
+	}
+	for _, tc := range tests {
+		got, ok := ParseLine(tc.raw)
+		if !ok {
+			t.Fatalf("ParseLine(%q) failed", tc.raw)
+		}
+		if got.Kind != tc.kind || got.Nick != tc.nick || got.Text != tc.wantText {
+			t.Fatalf("ParseLine(%q) = kind=%d nick=%q text=%q; want kind=%d nick=%q text=%q",
+				tc.raw, got.Kind, got.Nick, got.Text, tc.kind, tc.nick, tc.wantText)
 		}
 	}
 }

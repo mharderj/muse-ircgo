@@ -60,6 +60,9 @@ Split-view TUI, TLS connections, and first-class ZNC/bouncer support.
   existing `belial` query instead of opening a second buffer
 - Unread markers: buffers with unseen activity show a bold yellow `*` in
   the sidebar, cleared when you switch to them
+- Join/part/quit floods collapse: consecutive presence notices fold into
+  one summary row per event, e.g. `17:02–20:05 thadood joined #idlewhores
+  (×28)` (disable with `collapse_joins = false` under `[ui]`)
 
 ## Build
 
@@ -112,9 +115,12 @@ internal/version     release version (`-version`, CTCP VERSION replies)
 - `tab` — cycle buffers (channels, queries, server windows)
 - `alt+1` … `alt+9` — jump to a buffer by its sidebar position, top to bottom
 - `enter` — send
+- `pgup` / `pgdn` — scroll chat history (the pane stays put while you read;
+  `end` or scrolling back to the bottom follows new lines again)
 - mouse: left-click a buffer in the sidebar to switch to it; drag a buffer
   to reorder it within its group, or drag it onto `-- Archive --` to park
-  it (channels auto-PART; drag back or click `+` to recover and re-JOIN)
+  it (channels auto-PART; drag back or click `+` to recover and re-JOIN);
+  the mouse wheel scrolls the chat pane when it's over it
 
 Quit with `/quit` (or `/q`) — `ctrl+c` no longer closes the app.
 

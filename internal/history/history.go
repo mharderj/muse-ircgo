@@ -74,6 +74,20 @@ func FormatLine(l store.Line) (string, bool) {
 		return fmt.Sprintf("[%s] * %s %s", ts, l.Nick, text), true
 	case store.KindNotice:
 		return fmt.Sprintf("[%s] -%s- %s", ts, l.Nick, text), true
+	case store.KindJoin, store.KindPart, store.KindQuit:
+		// Membership lines keep their kind in the marker so a replayed
+		// log restores them exactly (and the UI can collapse join floods).
+		marker := "--join"
+		switch l.Kind {
+		case store.KindPart:
+			marker = "--part"
+		case store.KindQuit:
+			marker = "--quit"
+		}
+		if l.Nick != "" {
+			return fmt.Sprintf("[%s] %s %s %s", ts, marker, l.Nick, text), true
+		}
+		return fmt.Sprintf("[%s] %s %s", ts, marker, text), true
 	default:
 		if l.Nick != "" {
 			return fmt.Sprintf("[%s] -- %s %s", ts, l.Nick, text), true
@@ -83,8 +97,28 @@ func FormatLine(l store.Line) (string, bool) {
 }
 
 // logRe parses a log line: timestamp, a marker (<nick>, * nick, -nick-,
-// or --), and the text.
-var logRe = regexp.MustCompile(`^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] (<[^>]*>|\* \S+|-[^-]+-|--)(?: (.*))?$`)
+// --, or a --kind membership marker), and the text.
+var logRe = regexp.MustCompile(`^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] (<[^>]*>|\* \S+|-[^-]+-|--[a-z]*)(?: (.*))?$`)
+
+// legacyMembership sniffs out join/part/quit lines written before the log
+// gained kind markers: back then they were logged as "-- nick joined #ch"
+// and friends, with the kind lost. The text shapes are the app's own, so
+// matching them is safe.
+func legacyMembership(text string) (store.Kind, string, string, bool) {
+	nick, rest, ok := strings.Cut(text, " ")
+	if !ok {
+		return 0, "", "", false
+	}
+	switch {
+	case strings.HasPrefix(rest, "joined "):
+		return store.KindJoin, nick, rest, true
+	case strings.HasPrefix(rest, "left "):
+		return store.KindPart, nick, rest, true
+	case strings.HasPrefix(rest, "quit:"):
+		return store.KindQuit, nick, rest, true
+	}
+	return 0, "", "", false
+}
 
 // ParseLine parses a log line back into a scrollback line.
 func ParseLine(s string) (store.Line, bool) {
@@ -100,7 +134,27 @@ func ParseLine(s string) (store.Line, bool) {
 	l := store.Line{At: at, Text: text}
 	switch {
 	case marker == "--":
-		l.Kind = store.KindSystem
+		// Legacy membership lines (written before kind markers) are
+		// recognized by their text; anything else stays a system line
+		// with the text untouched.
+		if kind, nick, rest, ok := legacyMembership(text); ok {
+			l.Kind, l.Nick, l.Text = kind, nick, rest
+		} else {
+			l.Kind = store.KindSystem
+		}
+	case marker == "--join" || marker == "--part" || marker == "--quit":
+		kind := store.KindJoin
+		switch marker {
+		case "--part":
+			kind = store.KindPart
+		case "--quit":
+			kind = store.KindQuit
+		}
+		if nick, rest, ok := strings.Cut(text, " "); ok {
+			l.Kind, l.Nick, l.Text = kind, nick, rest
+		} else {
+			l.Kind, l.Nick, l.Text = kind, text, ""
+		}
 	case strings.HasPrefix(marker, "<"):
 		l.Kind, l.Nick = store.KindChat, marker[1:len(marker)-1]
 	case strings.HasPrefix(marker, "* "):
