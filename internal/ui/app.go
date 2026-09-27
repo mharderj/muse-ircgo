@@ -1693,9 +1693,9 @@ func (a *App) hoverText(marker string, buf *store.Buffer, row, dim lipgloss.Styl
 		r = append(r, ' ')
 	}
 	if a.archived[memberKey(buf.Server, buf.Name)] {
-		return row.Render(string(r[:sw-4])) + dim.Render("+") + row.Render(" ") + dim.Render("x")
+		return row.Render(string(r[:sw-4])) + dim.Render("+") + row.Render(" ") + dim.Render("x ")
 	}
-	return row.Render(string(r)) + dim.Render("x")
+	return row.Render(string(r)) + dim.Render("x ")
 }
 
 // sidebarAffordance maps a click's x-coordinate on row i to the hover
