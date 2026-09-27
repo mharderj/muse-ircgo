@@ -33,8 +33,8 @@ Split-view TUI, TLS connections, and first-class ZNC/bouncer support.
 - Word wrap in the chat pane: long messages wrap with a hanging indent,
   ANSI-aware so colors survive the break; image art and long URLs are
   never split
-- The focused buffer is remembered in the config (`last_buffer`, written on
-  quit) and restored on the next launch
+- The focused buffer is remembered in the config (`last_buffer`, updated on
+  every switch) and restored on the next launch
 - Sidebar buffer management: hovering a buffer highlights its row and
   reveals a dim `x` that parks it under `-- Archive --` (channels stay
   joined, nothing is parted); archived rows also offer `+` to recover
