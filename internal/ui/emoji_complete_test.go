@@ -222,14 +222,6 @@ func TestAutocompleteOverlay(t *testing.T) {
 	}
 }
 
-func TestACAnchorX(t *testing.T) {
-	if x := acAnchorX("> ", "hey :con", 4); x != 6 {
-		t.Fatalf("anchorX = %d; want 6", x)
-	}
-	if x := acAnchorX("> ", ":con", 0); x != 2 {
-		t.Fatalf("anchorX = %d; want 2", x)
-	}
-}
 
 // Typing more characters filters the match list, but the popup's geometry
 // must hold steady while it stays open — no border flapping.
@@ -254,11 +246,11 @@ func TestAutocompleteGeometryStableWhileTyping(t *testing.T) {
 	}
 	// The rendered box must keep the same line count too.
 	fake := strings.Repeat("x\n", 30)
-	first := overlayEmojiAC(fake, a.emojiAC, 2, 80, 16)
+	first := overlayEmojiAC(fake, a.emojiAC, 80, 16)
 	a.input.SetValue(":cla")
 	a.input.SetCursor(4)
 	a.refreshEmojiAC()
-	second := overlayEmojiAC(fake, a.emojiAC, 2, 80, 16)
+	second := overlayEmojiAC(fake, a.emojiAC, 80, 16)
 	if len(strings.Split(first, "\n")) != len(strings.Split(second, "\n")) {
 		t.Fatal("overlay line count changed while typing")
 	}
@@ -303,7 +295,7 @@ func TestACPopupBoxAlignsWithVS16Emoji(t *testing.T) {
 		t.Fatal("cloud not among matches for :clou")
 	}
 	fake := strings.Repeat("                                                  \n", 30)
-	out := overlayEmojiAC(fake, a.emojiAC, 2, 80, 16)
+	out := overlayEmojiAC(fake, a.emojiAC, 80, 16)
 	widths := map[int]bool{}
 	for _, l := range strings.Split(out, "\n") {
 		if strings.Contains(l, "╭") || strings.Contains(l, "│") || strings.Contains(l, "╰") {
@@ -334,7 +326,7 @@ func TestACPopupAvoidsSidebarDivider(t *testing.T) {
 	}
 	fake := strings.TrimSuffix(sb.String(), "\n")
 
-	out := overlayEmojiAC(fake, a.emojiAC, 2, 80, 16)
+	out := overlayEmojiAC(fake, a.emojiAC, 80, 16)
 	lines := strings.Split(out, "\n")
 	foundBox := false
 	for i := len(lines) - 4 - a.emojiAC.boxRows; i < len(lines)-2; i++ {

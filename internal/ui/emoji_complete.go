@@ -169,7 +169,7 @@ var acSelStyle = lipgloss.NewStyle().Reverse(true)
 // anchored at the ":" trigger's cell column just above the input line. It
 // splices over existing lines so the screen height — and mouse coordinates
 // — stay exactly as rendered.
-func overlayEmojiAC(screen string, ac *emojiComplete, anchorX, width, divX int) string {
+func overlayEmojiAC(screen string, ac *emojiComplete, width, divX int) string {
 	// The popup keeps its opening geometry: render boxRows rows even when
 	// fewer matches remain, padding the shortfall with blank rows so the
 	// borders never move while the popup is open.
@@ -207,21 +207,14 @@ func overlayEmojiAC(screen string, ac *emojiComplete, anchorX, width, divX int) 
 		Padding(0, 1).
 		Render(strings.Join(lines, "\n"))
 	boxLines := strings.Split(box, "\n")
-	x0 := anchorX
+	// The popup is pinned just right of the sidebar divider: a fixed spot
+	// above the input that never moves and never covers a divider.
+	x0 := divX + 1
 	if x0+boxW > width {
 		x0 = width - boxW
 	}
 	if x0 < 0 {
 		x0 = 0
-	}
-	// Don't straddle the sidebar divider: a popup anchored in the sidebar
-	// would otherwise cover the divider and make it look broken. Shift it
-	// just right of the divider so the divider stays continuous.
-	if x0 <= divX && x0+boxW > divX {
-		x0 = divX + 1
-		if x0+boxW > width {
-			x0 = width - boxW
-		}
 	}
 	inputIdx := height - 2 // input line sits above the status line
 	y0 := inputIdx - boxH
@@ -237,12 +230,3 @@ func overlayEmojiAC(screen string, ac *emojiComplete, anchorX, width, divX int) 
 	return strings.Join(scrLines, "\n")
 }
 
-// acAnchorX returns the cell column of the ":" trigger in the input line:
-// the prompt width plus the display width of the runes before it.
-func acAnchorX(prompt string, value string, anchor int) int {
-	runes := []rune(value)
-	if anchor > len(runes) {
-		anchor = len(runes)
-	}
-	return lipgloss.Width(prompt) + lipgloss.Width(string(runes[:anchor]))
-}

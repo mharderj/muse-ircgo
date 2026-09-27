@@ -2241,8 +2241,7 @@ func (a *App) View() string {
 		v = overlayEmojiTip(v, a.emojiTip, a.width)
 	}
 	if a.emojiAC != nil {
-		v = overlayEmojiAC(v, a.emojiAC,
-			acAnchorX(a.input.Prompt, a.input.Value(), a.emojiAC.anchor), a.width, a.sidebarWidth())
+		v = overlayEmojiAC(v, a.emojiAC, a.width, a.sidebarWidth())
 	}
 	return v
 }
