@@ -33,11 +33,20 @@ type emojiComplete struct {
 func acContentW(matches []emoji.Suggestion) int {
 	w := 0
 	for _, m := range matches {
-		if cw := lipgloss.Width(m.Emoji + " :" + m.Name + ":"); cw > w {
+		if cw := lipgloss.Width(acEmoji(m.Emoji) + " :" + m.Name + ":"); cw > w {
 			w = cw
 		}
 	}
 	return w
+}
+
+// acEmoji returns the emoji with VS16 (U+FE0F) stripped for use in boxed
+// popups. VS16 requests emoji presentation, which terminals render at
+// inconsistent widths (1 or 2 cells); the bare character has a
+// deterministic width that matches lipgloss's measurement, so the popup's
+// borders stay aligned.
+func acEmoji(e string) string {
+	return strings.ReplaceAll(e, "\uFE0F", "")
 }
 
 // acTriggerRe finds a ":" trigger at the end of the text before the cursor.
@@ -169,7 +178,7 @@ func overlayEmojiAC(screen string, ac *emojiComplete, anchorX, width int) string
 	lines := make([]string, 0, rows)
 	for i := 0; i < rows && ac.scroll+i < len(ac.matches); i++ {
 		m := ac.matches[ac.scroll+i]
-		lines = append(lines, m.Emoji+" :"+m.Name+":")
+		lines = append(lines, acEmoji(m.Emoji)+" :"+m.Name+":")
 	}
 	for len(lines) < rows {
 		lines = append(lines, "")

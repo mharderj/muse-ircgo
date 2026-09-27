@@ -1567,7 +1567,7 @@ func spliceCells(line string, x0 int, rep string) string {
 // overlayEmojiTip draws the emoji preview popup onto the rendered screen,
 // anchored just past the hovered emoji and clamped inside the screen.
 func overlayEmojiTip(screen string, tip *emojiTip, width int) string {
-	content := tip.emoji + "  :" + tip.shortcode + ":"
+	content := acEmoji(tip.emoji) + "  :" + tip.shortcode + ":"
 	contentW := lipgloss.Width(content)
 	boxW := contentW + 4 // border + padding
 	boxH := 3

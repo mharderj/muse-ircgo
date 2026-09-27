@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"ircgo/internal/emoji"
 )
@@ -260,5 +261,58 @@ func TestAutocompleteGeometryStableWhileTyping(t *testing.T) {
 	second := overlayEmojiAC(fake, a.emojiAC, 2, 80)
 	if len(strings.Split(first, "\n")) != len(strings.Split(second, "\n")) {
 		t.Fatal("overlay line count changed while typing")
+	}
+}
+
+// VS16 (U+FE0F) must be stripped in boxed popups: it requests emoji
+// presentation, which terminals render at inconsistent widths (1 or 2
+// cells), breaking the popup's borders. The bare character measures the
+// same in lipgloss and in the terminal.
+func TestACEmojiStripsVS16(t *testing.T) {
+	if got := acEmoji("☁\uFE0F"); got != "☁" {
+		t.Fatalf("acEmoji did not strip VS16: %q", got)
+	}
+	for _, s := range emoji.Suggest("") {
+		e := acEmoji(s.Emoji)
+		if strings.ContainsRune(e, '\uFE0F') {
+			t.Fatalf("VS16 survived stripping for %q", s.Name)
+		}
+		if w := lipgloss.Width(e); w != 1 && w != 2 {
+			t.Fatalf("emoji %q has nondeterministic width %d after stripping", s.Name, w)
+		}
+	}
+}
+
+// A popup containing a VS16 emoji (e.g. :cloud:) must render every box
+// line at the same width so the borders align.
+func TestACPopupBoxAlignsWithVS16Emoji(t *testing.T) {
+	a := testApp()
+	a.input.SetValue(":clou")
+	a.input.SetCursor(5)
+	a.refreshEmojiAC()
+	if a.emojiAC == nil {
+		t.Fatal("popup did not open for :clou")
+	}
+	found := false
+	for _, m := range a.emojiAC.matches {
+		if m.Name == "cloud" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("cloud not among matches for :clou")
+	}
+	fake := strings.Repeat("                                                  \n", 30)
+	out := overlayEmojiAC(fake, a.emojiAC, 2, 80)
+	widths := map[int]bool{}
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "╭") || strings.Contains(l, "│") || strings.Contains(l, "╰") {
+			widths[lipgloss.Width(l)] = true
+		}
+	}
+	// 50 = full screen width (box spliced onto 50-wide fake lines);
+	// every line carrying box content must agree.
+	if len(widths) != 1 {
+		t.Fatalf("box lines have inconsistent widths: %v", widths)
 	}
 }
